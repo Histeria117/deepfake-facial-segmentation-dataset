@@ -1,0 +1,50 @@
+# Entornos virtuales
+.venv/
+.venv1/
+.venv311/
+venv/
+env/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.ipynb_checkpoints/
+
+# PyCharm
+.idea/
+
+# Sistema
+.DS_Store
+Thumbs.db
+
+# Datos originales
+data_raw/
+
+# Datasets generados
+dataset_prueba/
+dataset_rostros/
+dataset_rostros_avanzado/
+
+# Salidas de parsing
+face_parsing_output/
+
+# Previews y comparativas generadas
+preview/
+preview_rostros/
+
+wider_filtrado/
+
+# Modelos pesados
+models/
+*.onnx
+*.pth
+*.pt
+*.ckpt
+*.safetensors
+
+# Archivos temporales
+*.log
+*.tmp

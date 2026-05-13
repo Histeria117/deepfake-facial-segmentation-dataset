@@ -1,0 +1,12 @@
+numpy==1.26.4
+opencv-python-headless==4.10.0.84
+pandas
+tqdm
+matplotlib
+mediapipe==0.10.14
+torch
+torchvision
+facexlib
+basicsr
+insightface==0.7.3
+onnxruntime
