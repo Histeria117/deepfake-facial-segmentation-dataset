@@ -3,8 +3,13 @@ import cv2
 import random
 import numpy as np
 import pandas as pd
+import torch
+
 from pathlib import Path
 from tqdm import tqdm
+from PIL import Image
+
+from diffusers import StableDiffusionInpaintPipeline
 
 
 BASE_DIR = Path(r"C:\ALURA ONE\PythonProject\tesis_dataset")
@@ -12,27 +17,31 @@ BASE_DIR = Path(r"C:\ALURA ONE\PythonProject\tesis_dataset")
 IMAGE_DIR = BASE_DIR / "data_raw" / "face_dataset" / "images"
 MASK_BASE_DIR = BASE_DIR / "face_parsing_output" / "binary_masks"
 
-OUTPUT_DIR = BASE_DIR / "dataset_rostros_avanzado" / "local"
-PREVIEW_DIR = BASE_DIR / "preview_rostros_avanzado"
+# Para no mezclar con el método anterior
+OUTPUT_DIR = BASE_DIR / "dataset_rostros_avanzado" / "local_inpainting"
+PREVIEW_DIR = BASE_DIR / "preview_local_inpainting"
 
-MAX_SAMPLES = 50
 IMAGE_SIZE = 512
+MAX_SAMPLES = 100
 
 REGIONS = ["left_eye", "right_eye", "nose", "lips"]
 
-random.seed(42)
-MIN_REGIONS_PER_SAMPLE = 2
-MAX_REGIONS_PER_SAMPLE = 4
-def choose_num_regions():
+# Modelo de inpainting
+MODEL_ID = "runwayml/stable-diffusion-inpainting"
 
-    r = random.random()
+# Configuración de generación
+NUM_INFERENCE_STEPS = 20
+GUIDANCE_SCALE = 7.5
 
-    if r < 0.70:
-        return 1
-    elif r < 0.95:
-        return 2
-    else:
-        return 3
+# Para tu laptop con 4GB VRAM conviene dejar esto en True
+LOW_VRAM_MODE = False
+USE_GPU = torch.cuda.is_available()
+
+RANDOM_SEED = 45
+random.seed(RANDOM_SEED)
+np.random.seed(RANDOM_SEED)
+torch.manual_seed(RANDOM_SEED)
+
 
 def ensure_dirs():
     for folder in [
@@ -104,150 +113,115 @@ def valid_item(image_path):
     }
 
 
-def bounding_rect_from_mask(mask):
-    if np.sum(mask) == 0:
-        return None
-    x, y, w, h = cv2.boundingRect(mask)
-    if w < 5 or h < 5:
-        return None
-    return x, y, w, h
-
-
-def expand_rect(x, y, w, h, img_w, img_h, scale=0.25):
-    px = int(w * scale)
-    py = int(h * scale)
-
-    nx = max(0, x - px)
-    ny = max(0, y - py)
-    nw = min(img_w - nx, w + 2 * px)
-    nh = min(img_h - ny, h + 2 * py)
-
-    return nx, ny, nw, nh
-
-
-def color_transfer_simple(src_patch, dst_patch, src_mask):
+def choose_num_regions():
     """
-    Ajuste sencillo de color usando media y std por canal
-    sobre la región útil del parche fuente.
+    70% -> 1 región
+    25% -> 2 regiones
+    5%  -> 3 regiones
     """
-    src = src_patch.astype(np.float32)
-    dst = dst_patch.astype(np.float32)
+    r = random.random()
 
-    mask = (src_mask > 0).astype(np.uint8)
-    if np.sum(mask) < 10:
-        return src_patch
-
-    result = src.copy()
-
-    for c in range(3):
-        src_vals = src[:, :, c][mask > 0]
-        dst_vals = dst[:, :, c][mask > 0]
-
-        if len(src_vals) < 10 or len(dst_vals) < 10:
-            continue
-
-        src_mean, src_std = src_vals.mean(), src_vals.std()
-        dst_mean, dst_std = dst_vals.mean(), dst_vals.std()
-
-        if src_std < 1e-6:
-            src_std = 1.0
-        if dst_std < 1e-6:
-            dst_std = 1.0
-
-        channel = src[:, :, c]
-        channel = (channel - src_mean) * (dst_std / src_std) + dst_mean
-        result[:, :, c] = np.clip(channel, 0, 255)
-
-    return result.astype(np.uint8)
+    if r < 0.70:
+        return 1
+    elif r < 0.95:
+        return 2
+    else:
+        return 3
 
 
-def build_source_canvas_for_clone(target_img, source_img, target_mask, source_mask):
-    """
-    Toma la región del source, la adapta al bbox del target,
-    ajusta color y construye un canvas para seamlessClone.
-    """
-    rect_t = bounding_rect_from_mask(target_mask)
-    rect_s = bounding_rect_from_mask(source_mask)
-
-    if rect_t is None or rect_s is None:
-        return None, None
-
-    tx, ty, tw, th = rect_t
-    sx, sy, sw, sh = rect_s
-
-    img_h, img_w = target_img.shape[:2]
-
-    tx, ty, tw, th = expand_rect(tx, ty, tw, th, img_w, img_h, scale=0.15)
-    sx, sy, sw, sh = expand_rect(sx, sy, sw, sh, img_w, img_h, scale=0.15)
-
-    src_patch = source_img[sy:sy + sh, sx:sx + sw]
-    src_mask_patch = source_mask[sy:sy + sh, sx:sx + sw]
-
-    dst_patch = target_img[ty:ty + th, tx:tx + tw]
-    dst_mask_patch = target_mask[ty:ty + th, tx:tx + tw]
-
-    if src_patch.size == 0 or dst_patch.size == 0:
-        return None, None
-
-    src_patch_resized = cv2.resize(src_patch, (tw, th), interpolation=cv2.INTER_LINEAR)
-    src_mask_resized = cv2.resize(src_mask_patch, (tw, th), interpolation=cv2.INTER_NEAREST)
-
-    _, src_mask_resized = cv2.threshold(src_mask_resized, 127, 255, cv2.THRESH_BINARY)
-
-    # Ajuste de color
-    src_patch_matched = color_transfer_simple(src_patch_resized, dst_patch, src_mask_resized)
-
-    # Canvas completo para seamlessClone
-    src_canvas = np.zeros_like(target_img)
-    src_canvas[ty:ty + th, tx:tx + tw] = src_patch_matched
-
-    clone_mask = np.zeros(target_mask.shape, dtype=np.uint8)
-    clone_mask[ty:ty + th, tx:tx + tw] = src_mask_resized
-
-    # Intersección con target_mask para que la región fake quede precisa
-    clone_mask = cv2.bitwise_and(clone_mask, target_mask)
-
-    # Limpiar un poco la máscara
-    kernel = np.ones((5, 5), np.uint8)
-    clone_mask = cv2.morphologyEx(clone_mask, cv2.MORPH_CLOSE, kernel)
-    clone_mask = cv2.GaussianBlur(clone_mask, (5, 5), 0)
-    _, clone_mask_bin = cv2.threshold(clone_mask, 20, 255, cv2.THRESH_BINARY)
-
-    return src_canvas, clone_mask_bin
+def clean_binary_mask(mask):
+    kernel = np.ones((3, 3), np.uint8)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+    _, mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
+    return mask
 
 
-def seamless_region_clone(target_img, source_img, target_mask, source_mask):
-    src_canvas, clone_mask = build_source_canvas_for_clone(
-        target_img, source_img, target_mask, source_mask
-    )
-
-    if src_canvas is None or clone_mask is None or np.sum(clone_mask) == 0:
-        return None, None
-
-    rect = bounding_rect_from_mask(clone_mask)
-    if rect is None:
-        return None, None
-
-    x, y, w, h = rect
-    center = (x + w // 2, y + h // 2)
-
-    try:
-        result = cv2.seamlessClone(
-            src_canvas,
-            target_img,
-            clone_mask,
-            center,
-            cv2.NORMAL_CLONE
-        )
-    except Exception:
-        return None, None
-
-    return result, clone_mask
+def dilate_mask(mask, kernel_size=15, iterations=1):
+    kernel = np.ones((kernel_size, kernel_size), np.uint8)
+    dilated = cv2.dilate(mask, kernel, iterations=iterations)
+    _, dilated = cv2.threshold(dilated, 127, 255, cv2.THRESH_BINARY)
+    return dilated
 
 
 def make_authentic_mask(full_face_mask, fake_mask):
     authentic = cv2.bitwise_and(full_face_mask, cv2.bitwise_not(fake_mask))
     return authentic
+
+
+def cv2_to_pil_rgb(img_bgr):
+    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+    return Image.fromarray(img_rgb)
+
+
+def mask_to_pil(mask):
+    return Image.fromarray(mask)
+
+
+def pil_to_cv2_bgr(img_pil):
+    img_rgb = np.array(img_pil)
+    img_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
+    return img_bgr
+
+
+def build_prompt(selected_regions):
+    region_names = {
+        "left_eye": "left eye",
+        "right_eye": "right eye",
+        "nose": "nose",
+        "lips": "lips"
+    }
+
+    pretty_regions = [region_names[r] for r in selected_regions]
+
+    if len(pretty_regions) == 1:
+        target_text = pretty_regions[0]
+    elif len(pretty_regions) == 2:
+        target_text = f"{pretty_regions[0]} and {pretty_regions[1]}"
+    else:
+        target_text = ", ".join(pretty_regions[:-1]) + f", and {pretty_regions[-1]}"
+
+    prompt = (
+        f"Photorealistic facial portrait. Modify only the {target_text} region of the face "
+        f"in a realistic but clearly altered synthetic way. Preserve identity, pose, hairstyle, "
+        f"background, skin tone, lighting, and all unmasked parts of the face. "
+        f"Keep the result natural-looking and coherent."
+    )
+
+    negative_prompt = (
+        "blurry, low quality, extra eyes, extra nose, duplicated features, distorted face, "
+        "deformed anatomy, cartoon, painting, unrealistic skin, changed background, bad quality"
+    )
+
+    return prompt, negative_prompt
+
+
+def init_inpaint_pipeline():
+    print("Inicializando pipeline de inpainting...")
+    print("GPU disponible:", torch.cuda.is_available())
+
+    dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+
+    pipe = StableDiffusionInpaintPipeline.from_pretrained(
+        MODEL_ID,
+        torch_dtype=dtype
+    )
+
+    pipe.enable_attention_slicing()
+    pipe.enable_vae_slicing()
+
+    # Si tienes poca VRAM, esto es lo más seguro.
+    if torch.cuda.is_available():
+        if LOW_VRAM_MODE:
+            print("Usando modo LOW_VRAM con CPU/GPU offload.")
+            pipe.enable_sequential_cpu_offload()
+        else:
+            print("Moviendo pipeline completo a CUDA.")
+            pipe.to("cuda")
+    else:
+        print("No hay CUDA, usando CPU.")
+        pipe.to("cpu")
+
+    return pipe
 
 
 def save_sample(sample_id, manipulated, authentic_mask, fake_mask):
@@ -274,6 +248,8 @@ def save_preview(sample_id, manipulated, authentic_mask, fake_mask):
 def main():
     ensure_dirs()
 
+    pipe = init_inpaint_pipeline()
+
     image_files = get_image_files()
     print("Imágenes encontradas:", len(image_files))
 
@@ -285,8 +261,8 @@ def main():
 
     print("Imágenes válidas con máscaras:", len(items))
 
-    if len(items) < 2:
-        print("Necesitas al menos 2 imágenes válidas.")
+    if len(items) == 0:
+        print("No hay imágenes válidas.")
         return
 
     generated = 0
@@ -302,18 +278,9 @@ def main():
         if target_img is None:
             continue
 
-        source_candidates = [x for x in items if x["stem"] != target_item["stem"]]
-        if not source_candidates:
-            continue
-
-        source_item = random.choice(source_candidates)
-        source_img = read_image(source_item["image_path"])
-        if source_img is None:
-            continue
-
         possible_regions = [
             r for r in REGIONS
-            if np.sum(target_item["masks"][r]) > 0 and np.sum(source_item["masks"][r]) > 0
+            if np.sum(target_item["masks"][r]) > 0
         ]
 
         if not possible_regions:
@@ -326,44 +293,49 @@ def main():
 
         selected_regions = random.sample(possible_regions, num_regions)
 
-        manipulated_img = target_img.copy()
+        # Máscara fake exacta para entrenamiento
         fake_mask_union = np.zeros_like(full_face_mask)
 
-        used_regions = []
-
         for region in selected_regions:
-            target_mask = target_item["masks"][region]
-            source_mask = source_item["masks"][region]
+            fake_mask_union = cv2.bitwise_or(fake_mask_union, target_item["masks"][region])
 
-            manipulated_candidate, clone_mask = seamless_region_clone(
-                manipulated_img,
-                source_img,
-                target_mask,
-                source_mask
-            )
+        fake_mask_union = clean_binary_mask(fake_mask_union)
 
-            if manipulated_candidate is None or clone_mask is None or np.sum(clone_mask) == 0:
-                continue
-
-            manipulated_img = manipulated_candidate
-
-            # Para entrenamiento usamos la máscara precisa del parsing,
-            # no la máscara interna de seamlessClone.
-            fake_mask_union = cv2.bitwise_or(fake_mask_union, target_mask)
-
-            used_regions.append(region)
-
-        if len(used_regions) == 0 or np.sum(fake_mask_union) == 0:
+        if np.sum(fake_mask_union) == 0:
             continue
 
-        # Limpiar máscara fake final
-        kernel = np.ones((3, 3), np.uint8)
-        fake_mask_union = cv2.morphologyEx(fake_mask_union, cv2.MORPH_CLOSE, kernel)
-        _, fake_mask_union = cv2.threshold(fake_mask_union, 127, 255, cv2.THRESH_BINARY)
+        # Máscara expandida para el modelo de inpainting
+        # Esto le da un poco más de contexto y suele mejorar el resultado visual
+        inpaint_mask = dilate_mask(fake_mask_union, kernel_size=15, iterations=1)
 
         authentic_mask = make_authentic_mask(full_face_mask, fake_mask_union)
 
-        sample_id = f"local_adv_{generated:05d}"
+        prompt, negative_prompt = build_prompt(selected_regions)
+
+        input_pil = cv2_to_pil_rgb(target_img)
+        mask_pil = mask_to_pil(inpaint_mask)
+
+        generator = torch.Generator(device="cpu").manual_seed(RANDOM_SEED + generated)
+
+        try:
+            result = pipe(
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                image=input_pil,
+                mask_image=mask_pil,
+                num_inference_steps=NUM_INFERENCE_STEPS,
+                guidance_scale=GUIDANCE_SCALE,
+                generator=generator,
+                height=IMAGE_SIZE,
+                width=IMAGE_SIZE
+            ).images[0]
+        except Exception as e:
+            print(f"Error generando inpainting para {target_item['stem']}: {e}")
+            continue
+
+        manipulated_img = pil_to_cv2_bgr(result)
+
+        sample_id = f"local_inpaint_{generated:05d}"
 
         img_path, auth_path, fake_path = save_sample(
             sample_id,
@@ -376,11 +348,11 @@ def main():
 
         records.append({
             "id": sample_id,
-            "tipo": "local_avanzado",
-            "regions": ",".join(used_regions),
-            "num_regions": len(used_regions),
+            "tipo": "local_inpainting",
+            "regions": ",".join(selected_regions),
+            "num_regions": len(selected_regions),
             "target_image": str(target_item["image_path"]),
-            "source_image": str(source_item["image_path"]),
+            "prompt": prompt,
             "imagen_original": str(img_path),
             "mascara_autentica": str(auth_path),
             "mascara_fake": str(fake_path)

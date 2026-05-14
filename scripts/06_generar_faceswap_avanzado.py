@@ -5,7 +5,34 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from tqdm import tqdm
+import onnxruntime as ort
+import site
+import sysconfig
+# Importar torch primero evita conflictos de DLL con cuDNN en Windows.
+# PyTorch carga sus propias DLLs CUDA/cuDNN.
+try:
+    import torch
+    print("Torch importado correctamente.")
+    print("Torch:", torch.__version__)
+    print("Torch CUDA disponible:", torch.cuda.is_available())
+except Exception as e:
+    print("Error importando torch:", e)
+    raise
 
+import onnxruntime as ort
+
+try:
+    # Sin directory="", para que ONNX Runtime busque primero DLLs compatibles,
+    # incluyendo las cargadas por PyTorch.
+    ort.preload_dlls(cuda=True, cudnn=True, msvc=True)
+    print("ONNX Runtime DLLs precargadas.")
+except Exception as e:
+    print("No se pudieron precargar DLLs con ONNX Runtime:", e)
+
+print("ONNX providers disponibles:", ort.get_available_providers())
+
+from insightface.app import FaceAnalysis
+from insightface.model_zoo import get_model
 from insightface.app import FaceAnalysis
 from insightface.model_zoo import get_model
 
@@ -17,10 +44,10 @@ PREVIEW_DIR = BASE_DIR / "preview_faceswap_avanzado"
 MODEL_PATH = BASE_DIR / "models" / "insightface" / "inswapper_128.onnx"
 
 IMAGE_SIZE = 512
-MAX_SAMPLES = 50
+MAX_SAMPLES = 100
 USE_GPU = True
 
-random.seed(42)
+random.seed(45)
 
 def ensure_dirs():
     for folder in [
@@ -112,6 +139,12 @@ def init_models():
         providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
         ctx_id = 0
 
+    import onnxruntime as ort
+
+    print("USE_GPU:", USE_GPU)
+    print("ONNX available providers:", ort.get_available_providers())
+    print("Providers solicitados:", providers)
+    print("ctx_id:", ctx_id)
     app = FaceAnalysis(name="buffalo_l", providers=providers)
     app.prepare(ctx_id=ctx_id, det_size=(640, 640))
 

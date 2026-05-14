@@ -7,14 +7,14 @@ import random
 
 BASE_DIR = Path(r"C:\ALURA ONE\PythonProject\tesis_dataset")
 
-LOCAL_META = BASE_DIR / "dataset_rostros_avanzado" / "local" / "metadata.csv"
+LOCAL_META = BASE_DIR / "dataset_rostros_avanzado" / "local_inpainting" / "metadata.csv"
 FACESWAP_META = BASE_DIR / "dataset_rostros_avanzado" / "faceswap" / "metadata.csv"
 
 OUT_DIR = BASE_DIR / "comparativas_dataset"
 
 IMAGE_SIZE = 256
 MAX_ROWS = 8
-RANDOM_SEED = 42
+RANDOM_SEED = 45
 
 
 def ensure_dirs():
