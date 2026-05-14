@@ -230,7 +230,51 @@ def save_preview(sample_id, manipulated, authentic_mask, fake_mask):
     out_path = PREVIEW_DIR / f"{sample_id}.png"
     cv2.imwrite(str(out_path), grid)
 
+def get_next_sample_index():
+    """
+    Busca archivos local_inpaint_XXXXX.png existentes
+    y devuelve el siguiente índice disponible.
+    """
+    img_dir = OUTPUT_DIR / "imagen_original"
+    existing_files = list(img_dir.glob("local_inpaint_*.png"))
 
+    if not existing_files:
+        return 0
+
+    indices = []
+
+    for file in existing_files:
+        try:
+            idx = int(file.stem.replace("local_inpaint_", ""))
+            indices.append(idx)
+        except ValueError:
+            pass
+
+    if not indices:
+        return 0
+
+    return max(indices) + 1
+
+
+def load_existing_metadata():
+    """
+    Carga metadata existente para poder continuar sin repetir imágenes base.
+    """
+    metadata_path = OUTPUT_DIR / "metadata.csv"
+
+    if not metadata_path.exists():
+        return [], set()
+
+    df = pd.read_csv(metadata_path)
+
+    records = df.to_dict("records")
+
+    if "target_image" in df.columns:
+        processed_targets = set(df["target_image"].astype(str).tolist())
+    else:
+        processed_targets = set()
+
+    return records, processed_targets
 def main():
     ensure_dirs()
 
@@ -251,14 +295,26 @@ def main():
         print("No hay imágenes válidas.")
         return
 
-    generated = 0
-    records = []
+    existing_files = list((OUTPUT_DIR / "imagen_original").glob("local_inpaint_*.png"))
+    records, processed_targets = load_existing_metadata()
+
+    next_index = get_next_sample_index()
+    generated_this_run = 0
+
+    print(f"Muestras existentes en metadata: {len(records)}")
+    print(f"Targets ya procesados: {len(processed_targets)}")
+    print(f"Siguiente índice de archivo: {next_index}")
 
     random.shuffle(items)
 
     for target_item in tqdm(items):
-        if generated >= MAX_SAMPLES:
+        if generated_this_run >= MAX_SAMPLES:
             break
+
+        target_key = str(target_item["image_path"])
+
+        if target_key in processed_targets:
+            continue
 
         target_img = read_image(target_item["image_path"])
         if target_img is None:
@@ -301,7 +357,7 @@ def main():
         input_pil = cv2_to_pil_rgb(target_img)
         mask_pil = mask_to_pil(inpaint_mask)
 
-        generator = torch.Generator(device="cpu").manual_seed(RANDOM_SEED + generated)
+        generator = torch.Generator(device="cpu").manual_seed(RANDOM_SEED + next_index)
 
         try:
             result = pipe(
@@ -321,7 +377,7 @@ def main():
 
         manipulated_img = pil_to_cv2_bgr(result)
 
-        sample_id = f"local_inpaint_{generated:05d}"
+        sample_id = f"local_inpaint_{next_index:05d}"
 
         img_path, auth_path, fake_path = save_sample(
             sample_id,
@@ -343,13 +399,19 @@ def main():
             "mascara_autentica": str(auth_path),
             "mascara_fake": str(fake_path)
         })
+        processed_targets.add(target_key)
 
-        generated += 1
+        metadata_path = OUTPUT_DIR / "metadata.csv"
+        pd.DataFrame(records).to_csv(metadata_path, index=False)
+
+        next_index += 1
+        generated_this_run += 1
 
     metadata_path = OUTPUT_DIR / "metadata.csv"
     pd.DataFrame(records).to_csv(metadata_path, index=False)
 
-    print("Muestras generadas:", generated)
+    print("Muestras generadas en esta ejecución:", generated_this_run)
+    print("Total en metadata:", len(records))
     print("Metadata:", metadata_path)
     print("Preview:", PREVIEW_DIR)
     print("Salida:", OUTPUT_DIR)
