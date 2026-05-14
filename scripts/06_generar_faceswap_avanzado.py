@@ -44,7 +44,7 @@ PREVIEW_DIR = BASE_DIR / "preview_faceswap_avanzado"
 MODEL_PATH = BASE_DIR / "models" / "insightface" / "inswapper_128.onnx"
 
 IMAGE_SIZE = 512
-MAX_SAMPLES = 100
+MAX_SAMPLES = 1000
 USE_GPU = True
 
 random.seed(45)
@@ -113,9 +113,56 @@ def valid_item(image_path):
     }
 
 
-def largest_face(faces):
-    if not faces:
-        return None
+def get_face_area(face):
+    bbox = face.bbox.astype(int)
+    x1, y1, x2, y2 = bbox
+    return max(0, x2 - x1) * max(0, y2 - y1)
+
+
+def choose_main_face(
+    faces,
+    img_shape,
+    min_main_area_ratio=0.06,
+    min_significant_area_ratio=0.025,
+    ambiguity_ratio=0.60
+):
+    """
+    Selecciona el rostro principal.
+
+    Regla:
+    - Usa el rostro más grande.
+    - Ignora rostros pequeños.
+    - Descarta solo si hay otro rostro grande cercano en tamaño.
+    """
+
+    if faces is None or len(faces) == 0:
+        return None, "no_faces", 0
+
+    h, w = img_shape[:2]
+    img_area = h * w
+
+    faces_sorted = sorted(faces, key=get_face_area, reverse=True)
+
+    main_face = faces_sorted[0]
+    main_area = get_face_area(main_face)
+    main_ratio = main_area / img_area
+
+    if main_ratio < min_main_area_ratio:
+        return None, f"main_face_too_small_{main_ratio:.3f}", len(faces)
+
+    significant_faces = [
+        f for f in faces_sorted
+        if (get_face_area(f) / img_area) >= min_significant_area_ratio
+    ]
+
+    if len(significant_faces) >= 2:
+        second_area = get_face_area(significant_faces[1])
+        second_vs_main = second_area / max(main_area, 1)
+
+        if second_vs_main >= ambiguity_ratio:
+            return None, f"ambiguous_faces_{second_vs_main:.2f}", len(faces)
+
+    return main_face, "ok", len(faces)
 
     def face_area(face):
         bbox = face.bbox.astype(int)
@@ -123,7 +170,41 @@ def largest_face(faces):
         return max(0, x2 - x1) * max(0, y2 - y1)
 
     return max(faces, key=face_area)
+def mask_for_selected_face(full_face_mask, face, padding_ratio=0.30):
+    """
+    Recorta la máscara full_face usando el bbox del rostro seleccionado.
+    Esto evita que la mascara_fake tome otro rostro si hay más de una cara.
+    """
 
+    if face is None:
+        return None
+
+    h, w = full_face_mask.shape
+
+    x1, y1, x2, y2 = face.bbox.astype(int)
+
+    bw = max(1, x2 - x1)
+    bh = max(1, y2 - y1)
+
+    pad_x = int(bw * padding_ratio)
+    pad_y = int(bh * padding_ratio)
+
+    x1 = max(0, x1 - pad_x)
+    y1 = max(0, y1 - pad_y)
+    x2 = min(w, x2 + pad_x)
+    y2 = min(h, y2 + pad_y)
+
+    bbox_mask = np.zeros_like(full_face_mask)
+    bbox_mask[y1:y2, x1:x2] = 255
+
+    selected_mask = cv2.bitwise_and(full_face_mask, bbox_mask)
+
+    if np.sum(selected_mask) == 0:
+        return None
+
+    _, selected_mask = cv2.threshold(selected_mask, 127, 255, cv2.THRESH_BINARY)
+
+    return selected_mask
 
 def init_models():
     if not MODEL_PATH.exists():
@@ -146,7 +227,7 @@ def init_models():
     print("Providers solicitados:", providers)
     print("ctx_id:", ctx_id)
     app = FaceAnalysis(name="buffalo_l", providers=providers)
-    app.prepare(ctx_id=ctx_id, det_size=(640, 640))
+    app.prepare(ctx_id=ctx_id, det_size=(320, 320), det_thresh=0.65)
 
     swapper = get_model(str(MODEL_PATH), providers=providers)
 
@@ -173,10 +254,18 @@ def clean_binary_mask(mask):
     return mask_filled
 
 
-def make_fake_and_auth_masks(masks):
-    fake_mask = masks["full_face"].copy()
+def make_fake_and_auth_masks(masks, target_face):
+    full_face_mask = masks["full_face"].copy()
+
+    fake_mask = mask_for_selected_face(full_face_mask, target_face)
+
+    if fake_mask is None:
+        return None, None
+
     fake_mask = clean_binary_mask(fake_mask)
+
     authentic_mask = np.zeros_like(fake_mask)
+
     return fake_mask, authentic_mask
 
 
@@ -243,15 +332,54 @@ def main():
         if source_img is None:
             continue
 
-        # Detectar cara principal en target y source
+        # Detectar rostro principal en target
         target_faces = app.get(target_img)
-        source_faces = app.get(source_img)
 
-        target_face = largest_face(target_faces)
-        source_face = largest_face(source_faces)
+        target_face, target_reason, target_faces_count = choose_main_face(
+            target_faces,
+            target_img.shape
+        )
 
-        if target_face is None or source_face is None:
+        if target_face is None:
+            print(f"Descartada target {target_item['stem']}: {target_reason}, detectados={target_faces_count}")
             continue
+
+        # Buscar source válido
+        source_face = None
+        valid_source_item = None
+        valid_source_img = None
+        source_reason = None
+        source_faces_count = 0
+
+        random.shuffle(source_candidates)
+
+        for candidate in source_candidates:
+            candidate_img = read_image(candidate["image_path"])
+
+            if candidate_img is None:
+                continue
+
+            candidate_faces = app.get(candidate_img)
+
+            candidate_face, candidate_reason, candidate_count = choose_main_face(
+                candidate_faces,
+                candidate_img.shape
+            )
+
+            if candidate_face is not None:
+                source_face = candidate_face
+                valid_source_item = candidate
+                valid_source_img = candidate_img
+                source_reason = candidate_reason
+                source_faces_count = candidate_count
+                break
+
+        if source_face is None:
+            print(f"Descartada target {target_item['stem']}: no se encontró source válido")
+            continue
+
+        source_item = valid_source_item
+        source_img = valid_source_img
 
         try:
             swapped = swapper.get(
@@ -264,7 +392,16 @@ def main():
             print(f"Error en swap {target_item['stem']} <- {source_item['stem']}: {e}")
             continue
 
-        fake_mask, authentic_mask = make_fake_and_auth_masks(target_item["masks"])
+        fake_mask, authentic_mask = make_fake_and_auth_masks(
+            target_item["masks"],
+            target_face
+        )
+        if fake_mask is None or authentic_mask is None:
+            print(f"Descartada {target_item['stem']}: máscara no coincide con rostro seleccionado")
+            continue
+
+        if np.sum(fake_mask) == 0:
+            continue
 
         if np.sum(fake_mask) == 0:
             continue
@@ -285,6 +422,11 @@ def main():
             "tipo": "faceswap_avanzado",
             "target_image": str(target_item["image_path"]),
             "source_image": str(source_item["image_path"]),
+            "target_faces_detected": target_faces_count,
+            "source_faces_detected": source_faces_count,
+            "face_selection": "main_largest_non_ambiguous",
+            "target_face_area": get_face_area(target_face),
+            "source_face_area": get_face_area(source_face),
             "imagen_original": str(img_path),
             "mascara_autentica": str(auth_path),
             "mascara_fake": str(fake_path)

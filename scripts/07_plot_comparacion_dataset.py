@@ -14,7 +14,7 @@ OUT_DIR = BASE_DIR / "comparativas_dataset"
 
 IMAGE_SIZE = 256
 MAX_ROWS = 8
-RANDOM_SEED = 45
+RANDOM_SEED = 32
 
 
 def ensure_dirs():

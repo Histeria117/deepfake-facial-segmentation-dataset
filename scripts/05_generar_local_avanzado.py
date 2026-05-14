@@ -24,7 +24,7 @@ PREVIEW_DIR = BASE_DIR / "preview_local_inpainting"
 IMAGE_SIZE = 512
 MAX_SAMPLES = 100
 
-REGIONS = ["left_eye", "right_eye", "nose", "lips"]
+REGIONS = ["left_eye", "right_eye", "nose", "lips","brows"]
 
 # Modelo de inpainting
 MODEL_ID = "runwayml/stable-diffusion-inpainting"
@@ -114,28 +114,13 @@ def valid_item(image_path):
 
 
 def choose_num_regions():
-    """
-    70% -> 1 región
-    25% -> 2 regiones
-    5%  -> 3 regiones
-    """
-    r = random.random()
-
-    if r < 0.70:
-        return 1
-    elif r < 0.95:
-        return 2
-    else:
-        return 3
-
-
+    numero = random.randint(2, 4)
+    return numero
 def clean_binary_mask(mask):
     kernel = np.ones((3, 3), np.uint8)
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
     _, mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
     return mask
-
-
 def dilate_mask(mask, kernel_size=15, iterations=1):
     kernel = np.ones((kernel_size, kernel_size), np.uint8)
     dilated = cv2.dilate(mask, kernel, iterations=iterations)
@@ -168,7 +153,8 @@ def build_prompt(selected_regions):
         "left_eye": "left eye",
         "right_eye": "right eye",
         "nose": "nose",
-        "lips": "lips"
+        "lips": "lips",
+        "brows":"eyebrows"
     }
 
     pretty_regions = [region_names[r] for r in selected_regions]
