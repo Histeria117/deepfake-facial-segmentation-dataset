@@ -9,9 +9,23 @@ from facexlib.parsing import init_parsing_model
 
 
 BASE_DIR = Path(r"C:\ALURA ONE\PythonProject\tesis_dataset")
+#Input dir_faceswap
+#INPUT_DIR = BASE_DIR / "data_raw" / "face_dataset" / "images_faceswap"
 
-INPUT_DIR = BASE_DIR / "data_raw" / "face_dataset" / "images"
-OUTPUT_DIR = BASE_DIR / "face_parsing_output"
+#Output dir_faceswap
+#OUTPUT_DIR = BASE_DIR / "face_parsing_output_faceswap"
+#----------------------------------------------------------------------------
+
+#Input dir_inpainting
+INPUT_DIR = BASE_DIR / "data_raw" / "face_dataset" / "images_inpainting"
+
+#Output dir_inpainting
+OUTPUT_DIR = BASE_DIR / "face_parsing_output_inpainting"
+
+
+
+
+
 
 IMAGE_SIZE = 512
 

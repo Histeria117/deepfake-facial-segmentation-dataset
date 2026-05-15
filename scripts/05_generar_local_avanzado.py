@@ -14,10 +14,8 @@ from diffusers import StableDiffusionInpaintPipeline
 
 BASE_DIR = Path(r"C:\ALURA ONE\PythonProject\tesis_dataset")
 
-IMAGE_DIR = BASE_DIR / "data_raw" / "face_dataset" / "images"
-MASK_BASE_DIR = BASE_DIR / "face_parsing_output" / "binary_masks"
-
-# Para no mezclar con el método anterior
+IMAGE_DIR = BASE_DIR / "data_raw" / "face_dataset" / "images_inpainting"
+MASK_BASE_DIR = BASE_DIR / "face_parsing_output_inpainting" / "binary_masks"
 OUTPUT_DIR = BASE_DIR / "dataset_rostros_avanzado" / "local_inpainting"
 PREVIEW_DIR = BASE_DIR / "preview_local_inpainting"
 
@@ -37,7 +35,7 @@ GUIDANCE_SCALE = 7.5
 LOW_VRAM_MODE = False
 USE_GPU = torch.cuda.is_available()
 
-RANDOM_SEED = 45
+RANDOM_SEED = 31
 random.seed(RANDOM_SEED)
 np.random.seed(RANDOM_SEED)
 torch.manual_seed(RANDOM_SEED)

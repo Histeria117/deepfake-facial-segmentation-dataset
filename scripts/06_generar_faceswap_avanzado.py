@@ -37,14 +37,14 @@ from insightface.app import FaceAnalysis
 from insightface.model_zoo import get_model
 
 BASE_DIR = Path(r"C:\ALURA ONE\PythonProject\tesis_dataset")
-IMAGE_DIR = BASE_DIR / "data_raw" / "face_dataset" / "images"
-MASK_BASE_DIR = BASE_DIR / "face_parsing_output" / "binary_masks"
+IMAGE_DIR = BASE_DIR / "data_raw" / "face_dataset" / "images_faceswap"
+MASK_BASE_DIR = BASE_DIR / "face_parsing_output_faceswap" / "binary_masks"
 OUTPUT_DIR = BASE_DIR / "dataset_rostros_avanzado" / "faceswap"
 PREVIEW_DIR = BASE_DIR / "preview_faceswap_avanzado"
 MODEL_PATH = BASE_DIR / "models" / "insightface" / "inswapper_128.onnx"
 
 IMAGE_SIZE = 512
-MAX_SAMPLES = 1000
+MAX_SAMPLES = 1002
 USE_GPU = True
 
 random.seed(45)
