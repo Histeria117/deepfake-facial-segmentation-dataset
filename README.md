@@ -1104,14 +1104,5 @@ warnings.filterwarnings(
 - [x] Script de comparación visual
 - [ ] Script final de unión global de batches
 - [ ] Script final de separación train/test
-- [ ] Integración con entrenamiento de U-Net dual decoder
-
 ---
 
-# Advertencia ética
-
-Este proyecto está diseñado con fines académicos y de investigación en detección y segmentación de manipulaciones faciales.
-
-El uso de técnicas de FaceSwap, inpainting o manipulación facial debe realizarse de manera responsable, respetando la privacidad, consentimiento y derechos de imagen de las personas involucradas.
-
-No se recomienda usar este proyecto para generar contenido engañoso, suplantación de identidad o distribución de imágenes manipuladas sin consentimiento.
