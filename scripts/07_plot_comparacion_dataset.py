@@ -8,8 +8,8 @@ import random
 BASE_DIR = Path(r"C:\ALURA ONE\PythonProject\tesis_dataset")
 
 # Metadata de cada tipo
-LOCAL_META = BASE_DIR / "dataset_rostros_avanzado" / "local_inpainting" / "metadata.csv"
-FACESWAP_META = BASE_DIR / "dataset_rostros_avanzado" / "faceswap" / "metadata.csv"
+LOCAL_META = BASE_DIR / "ddataset_batches" / "batch_000" / "faceswap" /"metadata.csv"
+FACESWAP_META = BASE_DIR / "ddataset_batches" / "batch_000" / "local_inpainting" /"metadata.csv"
 
 OUT_DIR = BASE_DIR / "comparativas_dataset"
 
@@ -29,9 +29,9 @@ REAL_SEARCH_DIRS = [
 
 # Carpetas donde puede buscar imágenes/máscaras generadas si la ruta del metadata ya no existe
 GENERATED_SEARCH_DIRS = [
-    BASE_DIR / "dataset_rostros_avanzado",
-    BASE_DIR / "dataset_rostros_avanzado" / "faceswap",
-    BASE_DIR / "dataset_rostros_avanzado" / "local_inpainting",
+    BASE_DIR / "dataset_batches",
+    BASE_DIR / "dataset_batches" /"batch_000"/ "faceswap",
+    BASE_DIR / "dataset_batches" /"batch_000"/ "local_inpainting",
 ]
 
 

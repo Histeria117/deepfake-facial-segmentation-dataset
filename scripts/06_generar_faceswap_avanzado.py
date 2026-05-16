@@ -8,6 +8,14 @@ from tqdm import tqdm
 import onnxruntime as ort
 import site
 import sysconfig
+import warnings
+
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings(
+    "ignore",
+    category=FutureWarning,
+    module="insightface.*"
+)
 # Importar torch primero evita conflictos de DLL con cuDNN en Windows.
 # PyTorch carga sus propias DLLs CUDA/cuDNN.
 try:
@@ -36,18 +44,23 @@ from insightface.model_zoo import get_model
 from insightface.app import FaceAnalysis
 from insightface.model_zoo import get_model
 
+BATCH_NUM = 0
+BATCH_SIZE = 1000
+MAX_NEW_SAMPLES = 1000
+IMAGE_SIZE = 512
+USE_GPU = True
+random.seed(45)
+
+BATCH_NAME = f"batch_{BATCH_NUM:03d}"
+METHOD_NAME = "faceswap"
+METHOD_PREFIX = "fs"
 BASE_DIR = Path(r"C:\ALURA ONE\PythonProject\tesis_dataset")
 IMAGE_DIR = BASE_DIR / "data_raw" / "face_dataset" / "images_faceswap"
 MASK_BASE_DIR = BASE_DIR / "face_parsing_output_faceswap" / "binary_masks"
-OUTPUT_DIR = BASE_DIR / "dataset_rostros_avanzado" / "faceswap"
-PREVIEW_DIR = BASE_DIR / "preview_faceswap_avanzado"
+OUTPUT_DIR = BASE_DIR / "dataset_batches" / BATCH_NAME / METHOD_NAME
+PREVIEW_DIR = BASE_DIR / "dataset_batches" / BATCH_NAME / f"preview_{METHOD_NAME}"
 MODEL_PATH = BASE_DIR / "models" / "insightface" / "inswapper_128.onnx"
 
-IMAGE_SIZE = 512
-MAX_SAMPLES = 1002
-USE_GPU = True
-
-random.seed(45)
 
 def ensure_dirs():
     for folder in [
@@ -96,6 +109,47 @@ def get_masks_for_image(stem):
         "full_face": full_face
     }
 
+def get_next_batch_index():
+    img_dir = OUTPUT_DIR / "imagen_original"
+    pattern = f"{METHOD_PREFIX}_b{BATCH_NUM:03d}_*.png"
+    existing_files = list(img_dir.glob(pattern))
+
+    if not existing_files:
+        return 0
+
+    indices = []
+
+    for file in existing_files:
+        try:
+            idx = int(file.stem.split("_")[-1])
+            indices.append(idx)
+        except ValueError:
+            pass
+
+    if not indices:
+        return 0
+
+    return max(indices) + 1
+
+def load_existing_metadata():
+    """
+    Carga metadata existente para poder continuar sin repetir imágenes base.
+    """
+    metadata_path = OUTPUT_DIR / "metadata.csv"
+
+    if not metadata_path.exists():
+        return [], set()
+
+    df = pd.read_csv(metadata_path)
+
+    records = df.to_dict("records")
+
+    if "target_image" in df.columns:
+        processed_targets = set(df["target_image"].astype(str).tolist())
+    else:
+        processed_targets = set()
+
+    return records, processed_targets
 
 def valid_item(image_path):
     stem = image_path.stem
@@ -310,15 +364,34 @@ def main():
         print("Necesitas al menos 2 imágenes válidas.")
         return
 
-    generated = 0
-    records = []
+    records, processed_targets = load_existing_metadata()
+
+    next_batch_index = get_next_batch_index()
+    generated_this_run = 0
+
+    print(f"Batch actual: {BATCH_NAME}")
+    print(f"Método: {METHOD_NAME}")
+    print(f"Muestras existentes en metadata: {len(records)}")
+    print(f"Targets ya procesados: {len(processed_targets)}")
+    print(f"Siguiente índice dentro del batch: {next_batch_index}")
+
+    print(f"Batch actual: {BATCH_NAME}")
+    print(f"Método: {METHOD_NAME}")
+    print(f"Siguiente índice dentro del batch: {next_batch_index}")
 
     random.shuffle(items)
 
     for target_item in tqdm(items):
-        if generated >= MAX_SAMPLES:
+        if generated_this_run >= MAX_NEW_SAMPLES:
             break
 
+        if next_batch_index >= BATCH_SIZE:
+            print(f"Batch {BATCH_NAME} completado.")
+            break
+        target_key = str(target_item["image_path"])
+
+        if target_key in processed_targets:
+            continue
         target_img = read_image(target_item["image_path"])
         if target_img is None:
             continue
@@ -406,7 +479,7 @@ def main():
         if np.sum(fake_mask) == 0:
             continue
 
-        sample_id = f"faceswap_adv_{generated:05d}"
+        sample_id = f"{METHOD_PREFIX}_b{BATCH_NUM:03d}_{next_batch_index:04d}"
 
         img_path, auth_path, fake_path = save_sample(
             sample_id,
@@ -419,7 +492,12 @@ def main():
 
         records.append({
             "id": sample_id,
-            "tipo": "faceswap_avanzado",
+            "tipo": METHOD_NAME,
+            "batch": BATCH_NAME,
+            "batch_num": BATCH_NUM,
+            "batch_index": next_batch_index,
+            "global_index": BATCH_NUM * BATCH_SIZE + next_batch_index,
+            "target_stem": target_item["stem"],
             "target_image": str(target_item["image_path"]),
             "source_image": str(source_item["image_path"]),
             "target_faces_detected": target_faces_count,
@@ -431,13 +509,20 @@ def main():
             "mascara_autentica": str(auth_path),
             "mascara_fake": str(fake_path)
         })
+        processed_targets.add(target_key)
 
-        generated += 1
+        metadata_path = OUTPUT_DIR / "metadata.csv"
+        pd.DataFrame(records).to_csv(metadata_path, index=False)
+
+        next_batch_index += 1
+        generated_this_run += 1
+
 
     metadata_path = OUTPUT_DIR / "metadata.csv"
     pd.DataFrame(records).to_csv(metadata_path, index=False)
 
-    print("Muestras generadas:", generated)
+    print("Muestras generadas en esta ejecución:", generated_this_run)
+    print("Total en metadata:", len(records))
     print("Metadata:", metadata_path)
     print("Preview:", PREVIEW_DIR)
     print("Salida:", OUTPUT_DIR)

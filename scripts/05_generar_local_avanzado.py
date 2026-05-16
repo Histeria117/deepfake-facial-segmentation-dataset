@@ -48,7 +48,10 @@ random.seed(RANDOM_SEED)
 np.random.seed(RANDOM_SEED)
 torch.manual_seed(RANDOM_SEED)
 
-
+MAX_RETRIES = 3
+BLACK_MEAN_THRESHOLD = 10
+BLACK_STD_THRESHOLD = 8
+BLACK_RATIO_THRESHOLD = 0.92
 def ensure_dirs():
     for folder in [
         OUTPUT_DIR / "imagen_original",
@@ -152,7 +155,30 @@ def pil_to_cv2_bgr(img_pil):
     img_rgb = np.array(img_pil)
     img_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
     return img_bgr
+def is_mostly_black(img_bgr):
+    if img_bgr is None:
+        return True
 
+    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+
+    mean_val = float(np.mean(gray))
+    std_val = float(np.std(gray))
+    black_ratio = float(np.mean(gray < 10))
+
+    if mean_val < BLACK_MEAN_THRESHOLD:
+        return True
+
+    if std_val < BLACK_STD_THRESHOLD:
+        return True
+
+    if black_ratio > BLACK_RATIO_THRESHOLD:
+        return True
+
+    return False
+
+
+def is_bad_generation(img_bgr):
+    return is_mostly_black(img_bgr)
 
 def build_prompt(selected_regions):
     region_names = {
@@ -195,7 +221,9 @@ def init_inpaint_pipeline():
 
     pipe = StableDiffusionInpaintPipeline.from_pretrained(
         MODEL_ID,
-        torch_dtype=dtype
+        torch_dtype=dtype,
+        safety_checker=None,
+        requires_safety_checker=False
     )
 
     pipe.enable_attention_slicing()
@@ -368,26 +396,51 @@ def main():
         input_pil = cv2_to_pil_rgb(target_img)
         mask_pil = mask_to_pil(inpaint_mask)
 
-        generator = torch.Generator(device="cpu").manual_seed(
-            RANDOM_SEED + (BATCH_NUM * BATCH_SIZE) + next_batch_index
-        )
-        try:
-            result = pipe(
-                prompt=prompt,
-                negative_prompt=negative_prompt,
-                image=input_pil,
-                mask_image=mask_pil,
-                num_inference_steps=NUM_INFERENCE_STEPS,
-                guidance_scale=GUIDANCE_SCALE,
-                generator=generator,
-                height=IMAGE_SIZE,
-                width=IMAGE_SIZE
-            ).images[0]
-        except Exception as e:
-            print(f"Error generando inpainting para {target_item['stem']}: {e}")
-            continue
+        manipulated_img = None
+        seed_used = None
+        retry_used = None
 
-        manipulated_img = pil_to_cv2_bgr(result)
+        base_seed = RANDOM_SEED + (BATCH_NUM * BATCH_SIZE) + next_batch_index
+
+        for retry in range(MAX_RETRIES):
+            current_seed = base_seed + retry * 10000
+            generator = torch.Generator(device="cpu").manual_seed(current_seed)
+
+            try:
+                result = pipe(
+                    prompt=prompt,
+                    negative_prompt=negative_prompt,
+                    image=input_pil,
+                    mask_image=mask_pil,
+                    num_inference_steps=NUM_INFERENCE_STEPS,
+                    guidance_scale=GUIDANCE_SCALE,
+                    generator=generator,
+                    height=IMAGE_SIZE,
+                    width=IMAGE_SIZE
+                ).images[0]
+            except Exception as e:
+                print(f"Error generando inpainting para {target_item['stem']} (retry {retry + 1}/{MAX_RETRIES}): {e}")
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                continue
+
+            candidate_img = pil_to_cv2_bgr(result)
+
+            if is_bad_generation(candidate_img):
+                print(
+                    f"Salida negra/inválida en {target_item['stem']} (retry {retry + 1}/{MAX_RETRIES}, seed={current_seed})")
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                continue
+
+            manipulated_img = candidate_img
+            seed_used = current_seed
+            retry_used = retry
+            break
+
+        if manipulated_img is None:
+            print(f"No se pudo generar una imagen válida para {target_item['stem']}. Se omite.")
+            continue
 
         sample_id = f"{METHOD_PREFIX}_b{BATCH_NUM:03d}_{next_batch_index:04d}"
 
@@ -412,6 +465,8 @@ def main():
             "num_regions": len(selected_regions),
             "target_image": str(target_item["image_path"]),
             "prompt": prompt,
+            "seed_used": seed_used,
+            "retry_used": retry_used,
             "imagen_original": str(img_path),
             "mascara_autentica": str(auth_path),
             "mascara_fake": str(fake_path)
