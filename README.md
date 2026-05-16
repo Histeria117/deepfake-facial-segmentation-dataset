@@ -1,6 +1,6 @@
 # Deepfake Facial Segmentation Dataset Generator
 
-Pipeline para generar un dataset sintético de manipulaciones faciales orientado al entrenamiento de una red neuronal convolucional basada en U-Net con doble decodificador.
+Pipeline para generar un dataset sintético de manipulaciones faciales orientado al entrenamiento de una red neuronal de segmentación basada en una arquitectura tipo U-Net con doble decodificador.
 
 La versión actual del proyecto genera dos tipos principales de manipulación facial:
 
@@ -13,38 +13,154 @@ Cada muestra generada mantiene la estructura:
 imagen_original/
 mascara_autentica/
 mascara_fake/
+metadata.csv
 ```
 
 El objetivo es producir imágenes manipuladas junto con máscaras binarias que indiquen qué regiones del rostro son auténticas y cuáles fueron alteradas.
 
 ---
 
-## Objetivo del proyecto
+# Distribución de trabajo
+
+Dataset utilizado:
+
+```text
+FFHQ
+Imágenes utilizadas: 1024x1024
+1000 imágenes por carpeta / batch
+```
+
+La generación se divide en tandas de 1000 imágenes para mantener control del proceso, evitar sobrescrituras y permitir que diferentes personas generen partes del dataset de forma independiente.
+
+## Angel
+
+### FaceSwap
+
+```text
+Dataset/carpeta: 25k - 36k
+Cantidad aproximada: 13k imágenes
+Batches: 0 - 12
+```
+
+### Inpainting local
+
+```text
+Dataset/carpeta: 0k - 11k
+Cantidad aproximada: 12k imágenes
+Batches: 0 - 11
+```
+
+## Cuauthli
+
+### FaceSwap
+
+```text
+Dataset/carpeta: 37k - 49k
+Cantidad aproximada: 12k imágenes
+Batches: 13 - 25
+```
+
+### Inpainting local
+
+```text
+Dataset/carpeta: 12k - 24k
+Cantidad aproximada: 13k imágenes
+Batches: 12 - 25
+```
+
+## Regla importante de batches
+
+Cada batch genera máximo 1000 muestras por tipo de alteración.
+
+Ejemplo:
+
+```text
+batch_000/
+├── faceswap/
+└── local_inpainting/
+
+batch_001/
+├── faceswap/
+└── local_inpainting/
+```
+
+Los nombres de archivo deben respetar este formato:
+
+```text
+FaceSwap:
+fs_b000_0000.png
+fs_b000_0001.png
+...
+fs_b000_0999.png
+
+Inpainting:
+inp_b000_0000.png
+inp_b000_0001.png
+...
+inp_b000_0999.png
+```
+
+Para cambiar de tanda, solo se debe modificar:
+
+```python
+BATCH_NUM = 0
+```
+
+Por ejemplo:
+
+```python
+BATCH_NUM = 1
+```
+
+genera:
+
+```text
+fs_b001_0000.png
+inp_b001_0000.png
+```
+
+Es importante que dos personas no usen el mismo `BATCH_NUM` para generar datos distintos, ya que eso provocaría IDs repetidos.
+
+---
+
+# Objetivo del proyecto
 
 El objetivo de este proyecto es construir un dataset sintético para tareas de segmentación de manipulaciones faciales.
 
 El dataset está diseñado para una arquitectura tipo **U-Net con doble decodificador**, donde una salida aprende a segmentar regiones auténticas y otra salida aprende a segmentar regiones falsas o manipuladas.
 
-La estructura de salida esperada es:
+El dataset final busca contener aproximadamente:
 
 ```text
-dataset_rostros_avanzado/
-├── faceswap/
-│   ├── imagen_original/
-│   ├── mascara_autentica/
-│   ├── mascara_fake/
-│   └── metadata.csv
-│
-└── local_inpainting/
-    ├── imagen_original/
-    ├── mascara_autentica/
-    ├── mascara_fake/
-    └── metadata.csv
+25,000 imágenes FaceSwap
+25,000 imágenes Inpainting localizado
 ```
+
+Total aproximado:
+
+```text
+50,000 imágenes manipuladas
+```
+
+Posteriormente, el dataset puede dividirse en:
+
+```text
+90% entrenamiento
+10% prueba
+```
+
+Ejemplo aproximado:
+
+```text
+45,000 imágenes para entrenamiento
+5,000 imágenes para prueba
+```
+
+La separación final debe hacerse cuidando que una misma imagen base de FFHQ no quede al mismo tiempo en entrenamiento y prueba.
 
 ---
 
-## Tipos de manipulación
+# Tipos de manipulación
 
 ## 1. FaceSwap avanzado
 
@@ -62,7 +178,7 @@ CUDA
 cuDNN
 ```
 
-### Modelo principal
+## Modelo principal
 
 El modelo usado para el intercambio facial es:
 
@@ -76,7 +192,7 @@ Este modelo debe colocarse manualmente en:
 models/insightface/inswapper_128.onnx
 ```
 
-### Proceso general
+## Proceso general
 
 El pipeline de FaceSwap realiza los siguientes pasos:
 
@@ -96,7 +212,7 @@ imagen con rostro intercambiado
 generación de máscara fake y máscara auténtica
 ```
 
-### Máscaras en FaceSwap
+## Máscaras en FaceSwap
 
 Para FaceSwap, toda la región facial interna se considera manipulada.
 
@@ -128,7 +244,7 @@ Esto permite mantener el enfoque en el rostro visible y relevante para la segmen
 
 El segundo tipo de manipulación consiste en alterar regiones específicas del rostro usando un modelo generativo de inpainting.
 
-A diferencia del método anterior basado en `seamlessClone`, esta versión ya no copia regiones desde otra imagen. En su lugar, usa un modelo generativo para reconstruir o modificar zonas específicas del rostro.
+A diferencia de un método basado únicamente en copiado de regiones o `seamlessClone`, esta versión usa un modelo generativo para reconstruir o modificar zonas específicas del rostro.
 
 Para esto se utiliza:
 
@@ -139,7 +255,7 @@ PyTorch CUDA
 GPU NVIDIA
 ```
 
-### Modelo principal
+## Modelo principal
 
 El modelo usado para inpainting es:
 
@@ -155,36 +271,31 @@ Después de descargarse, queda almacenado en caché local, normalmente en:
 C:\Users\<usuario>\.cache\huggingface\hub
 ```
 
-Por lo tanto, la primera ejecución puede tardar bastante, pero las siguientes ejecuciones ya no deberían descargar todo el modelo otra vez.
+La primera ejecución puede tardar bastante, pero las siguientes ejecuciones ya no deberían descargar el modelo completo otra vez.
 
-### Regiones alteradas
+## Regiones alteradas
 
-El script selecciona aleatoriamente una o varias regiones faciales:
+El script selecciona aleatoriamente varias regiones faciales:
 
 ```text
 left_eye
 right_eye
 nose
 lips
+brows
 ```
 
-Puede generar muestras con:
+Actualmente se seleccionan entre 2 y 4 regiones por imagen.
+
+Ejemplos:
 
 ```text
-1 región alterada
-2 regiones alteradas
-3 regiones alteradas
+nose,lips
+left_eye,right_eye,brows
+right_eye,nose,lips,brows
 ```
 
-Por ejemplo:
-
-```text
-nose
-left_eye,lips
-right_eye,nose,lips
-```
-
-### Proceso general
+## Proceso general
 
 El pipeline de inpainting realiza los siguientes pasos:
 
@@ -204,7 +315,7 @@ imagen manipulada
 generación de máscara fake y máscara auténtica
 ```
 
-### Máscaras en inpainting
+## Máscaras en inpainting
 
 Para inpainting localizado:
 
@@ -224,15 +335,13 @@ mascara_autentica = full_face - mascara_fake
 
 ---
 
-## Face Parsing
+# Face Parsing
 
 Antes de generar FaceSwap o Inpainting se ejecuta un proceso de segmentación facial.
 
 El face parsing permite obtener máscaras binarias por región facial.
 
- un proceso de segmentación facial.
-
-El faceLas máscaras principales usadas en este proyecto son:
+Las máscaras principales usadas en este proyecto son:
 
 ```text
 left_eye
@@ -257,9 +366,18 @@ mascara_fake
 mascara_autentica
 ```
 
+Actualmente se manejan carpetas separadas para cada tipo de alteración:
+
+```text
+face_parsing_output_faceswap/
+face_parsing_output_inpainting/
+```
+
+Esto permite trabajar con tandas separadas sin mezclar máscaras.
+
 ---
 
-## Estructura actual del repositorio
+# Estructura actual del repositorio
 
 El repositorio solo contiene los scripts y archivos necesarios para ejecutar el pipeline.
 
@@ -280,17 +398,22 @@ Las carpetas con datos, modelos y resultados generados no se suben al repositori
 
 ---
 
-## Carpetas que debe crear el usuario
+# Estructura de carpetas de entrada
 
-Antes de ejecutar el proyecto, se debe crear esta estructura:
+El proyecto espera una estructura similar a esta:
 
 ```text
 tesis_dataset/
 ├── data_raw/
 │   └── face_dataset/
-│       └── images/
-│           ├── imagen_001.jpg
-│           ├── imagen_002.jpg
+│       ├── images_faceswap/
+│       │   ├── 00000.png
+│       │   ├── 00001.png
+│       │   └── ...
+│       │
+│       └── images_inpainting/
+│           ├── 00000.png
+│           ├── 00001.png
 │           └── ...
 │
 └── models/
@@ -298,21 +421,19 @@ tesis_dataset/
         └── inswapper_128.onnx
 ```
 
-La carpeta:
+## Imágenes para FaceSwap
 
 ```text
-data_raw/face_dataset/images/
+data_raw/face_dataset/images_faceswap/
 ```
 
-debe contener las imágenes base de rostros.
-
-El modelo:
+## Imágenes para Inpainting
 
 ```text
-inswapper_128.onnx
+data_raw/face_dataset/images_inpainting/
 ```
 
-debe colocarse en:
+## Modelo InSwapper
 
 ```text
 models/insightface/inswapper_128.onnx
@@ -320,23 +441,123 @@ models/insightface/inswapper_128.onnx
 
 ---
 
-## Carpetas generadas automáticamente
+# Estructura de carpetas generadas
 
-Al ejecutar los scripts se generan carpetas como:
+La salida se organiza por batches:
 
 ```text
-face_parsing_output/
-dataset_rostros_avanzado/
-preview_faceswap_avanzado/
-preview_local_inpainting/
-comparativas_dataset/
+dataset_batches/
+├── batch_000/
+│   ├── faceswap/
+│   │   ├── imagen_original/
+│   │   ├── mascara_autentica/
+│   │   ├── mascara_fake/
+│   │   └── metadata.csv
+│   │
+│   ├── preview_faceswap/
+│   │
+│   ├── local_inpainting/
+│   │   ├── imagen_original/
+│   │   ├── mascara_autentica/
+│   │   ├── mascara_fake/
+│   │   └── metadata.csv
+│   │
+│   └── preview_local_inpainting/
+│
+├── batch_001/
+├── batch_002/
+└── ...
 ```
-
-Estas carpetas están ignoradas por Git porque contienen salidas generadas, imágenes, máscaras o archivos grandes.
 
 ---
 
-## Requisitos recomendados
+# Formato de nombres
+
+El formato de nombres está diseñado para evitar sobrescrituras al unir batches.
+
+## FaceSwap
+
+```text
+fs_b000_0000.png
+fs_b000_0001.png
+...
+fs_b000_0999.png
+```
+
+## Inpainting
+
+```text
+inp_b000_0000.png
+inp_b000_0001.png
+...
+inp_b000_0999.png
+```
+
+Donde:
+
+```text
+fs  = FaceSwap
+inp = Inpainting
+b000 = batch 000
+0000 = índice dentro del batch
+```
+
+Ejemplo:
+
+```text
+fs_b012_0457.png
+```
+
+significa:
+
+```text
+Método: FaceSwap
+Batch: 12
+Índice dentro del batch: 457
+```
+
+---
+
+# Metadata
+
+Cada batch y cada tipo de alteración genera su propio archivo:
+
+```text
+metadata.csv
+```
+
+Campos principales:
+
+```text
+id
+tipo
+batch
+batch_num
+batch_index
+global_index
+target_stem
+target_image
+source_image
+regions
+num_regions
+prompt
+seed_used
+retry_used
+imagen_original
+mascara_autentica
+mascara_fake
+```
+
+No todos los campos aparecen en ambos métodos.
+
+Por ejemplo:
+
+- `source_image` aplica a FaceSwap.
+- `regions`, `prompt`, `seed_used` y `retry_used` aplican a Inpainting.
+
+---
+
+# Requisitos recomendados
 
 Este proyecto fue probado en Windows con:
 
@@ -353,9 +574,9 @@ También puede ejecutarse parcialmente en CPU, pero el rendimiento será mucho m
 
 ---
 
-## Instalación
+# Instalación
 
-### 1. Crear entorno virtual
+## 1. Crear entorno virtual
 
 Desde la carpeta principal del proyecto:
 
@@ -363,13 +584,13 @@ Desde la carpeta principal del proyecto:
 py -3.11 -m venv .venv311
 ```
 
-### 2. Actualizar herramientas base
+## 2. Actualizar herramientas base
 
 ```powershell
 .\.venv311\Scripts\python.exe -m pip install --upgrade pip setuptools wheel
 ```
 
-### 3. Instalar PyTorch con CUDA
+## 3. Instalar PyTorch con CUDA
 
 Para GPU NVIDIA con CUDA 12.6:
 
@@ -389,11 +610,7 @@ La salida esperada debe incluir:
 is_available: True
 ```
 
----
-
-## Instalación de dependencias
-
-Instalar dependencias generales:
+## 4. Instalar dependencias generales
 
 ```powershell
 .\.venv311\Scripts\python.exe -m pip install -r requirements.txt
@@ -421,7 +638,7 @@ huggingface_hub
 
 ---
 
-## Configuración GPU para FaceSwap
+# Configuración GPU para FaceSwap
 
 El script de FaceSwap usa:
 
@@ -430,18 +647,7 @@ ONNX Runtime GPU
 CUDAExecutionProvider
 ```
 
-En Windows puede ser necesario cargar manualmente las rutas de CUDA/cuDNN dentro del script.
-
-La versión actual de `06_generar_faceswap_avanzado.py` agrega rutas como:
-
-```text
-C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6\bin
-.venv311\Lib\site-packages\nvidia\cudnn\bin
-.venv311\Lib\site-packages\nvidia\cublas\bin
-.venv311\Lib\site-packages\nvidia\cuda_runtime\bin
-```
-
-Una ejecución correcta debe mostrar algo como:
+Una ejecución correcta debe mostrar:
 
 ```text
 ONNX providers disponibles: ['TensorrtExecutionProvider', 'CUDAExecutionProvider', 'CPUExecutionProvider']
@@ -452,7 +658,7 @@ Esto confirma que FaceSwap está usando GPU.
 
 ---
 
-## Configuración GPU para Inpainting
+# Configuración GPU para Inpainting
 
 El script de inpainting usa:
 
@@ -468,27 +674,24 @@ Una ejecución correcta debe mostrar:
 GPU disponible: True
 ```
 
-El script puede ejecutarse en modo de bajo consumo de VRAM usando:
-
-```python
-LOW_VRAM_MODE = True
-```
-
-Este modo usa offload entre CPU y GPU para evitar errores de memoria en tarjetas con poca VRAM.
-
 Para una GPU de 4 GB, se recomienda iniciar con:
 
 ```python
 LOW_VRAM_MODE = True
 NUM_INFERENCE_STEPS = 15
-MAX_SAMPLES = 5
+MAX_NEW_SAMPLES = 100
 ```
 
-Después se puede aumentar gradualmente.
+Si la GPU soporta el pipeline completo, puede usarse:
+
+```python
+LOW_VRAM_MODE = False
+NUM_INFERENCE_STEPS = 20
+```
 
 ---
 
-## Uso
+# Uso
 
 Los scripts deben ejecutarse en orden.
 
@@ -500,25 +703,37 @@ Los scripts deben ejecutarse en orden.
 .\.venv311\Scripts\python.exe .\scripts\04_face_parsing_bisenet.py
 ```
 
-Este script genera:
+Este script genera máscaras en carpetas como:
 
 ```text
-face_parsing_output/
-├── parsing_index/
-├── binary_masks/
-│   ├── left_eye/
-│   ├── right_eye/
-│   ├── nose/
-│   ├── mouth/
-│   ├── lips/
-│   ├── brows/
-│   └── full_face/
-└── preview/
+face_parsing_output_faceswap/
+face_parsing_output_inpainting/
+```
+
+La estructura interna esperada es:
+
+```text
+binary_masks/
+├── left_eye/
+├── right_eye/
+├── nose/
+├── mouth/
+├── lips/
+├── brows/
+└── full_face/
 ```
 
 ---
 
 ## 2. Generar inpainting facial localizado
+
+Antes de ejecutar, configurar el batch:
+
+```python
+BATCH_NUM = 0
+```
+
+Ejecutar:
 
 ```powershell
 .\.venv311\Scripts\python.exe .\scripts\05_generar_local_avanzado.py
@@ -527,25 +742,32 @@ face_parsing_output/
 Este script genera:
 
 ```text
-dataset_rostros_avanzado/
-└── local_inpainting/
-    ├── imagen_original/
-    ├── mascara_autentica/
-    ├── mascara_fake/
-    └── metadata.csv
+dataset_batches/
+└── batch_000/
+    └── local_inpainting/
+        ├── imagen_original/
+        ├── mascara_autentica/
+        ├── mascara_fake/
+        └── metadata.csv
 ```
 
 También genera previews en:
 
 ```text
-preview_local_inpainting/
+dataset_batches/batch_000/preview_local_inpainting/
 ```
 
 ---
 
 ## 3. Generar FaceSwap avanzado
 
-Antes de ejecutar este script, colocar el modelo:
+Antes de ejecutar, configurar el batch:
+
+```python
+BATCH_NUM = 0
+```
+
+También se debe colocar el modelo:
 
 ```text
 models/insightface/inswapper_128.onnx
@@ -560,18 +782,19 @@ Ejecutar:
 Este script genera:
 
 ```text
-dataset_rostros_avanzado/
-└── faceswap/
-    ├── imagen_original/
-    ├── mascara_autentica/
-    ├── mascara_fake/
-    └── metadata.csv
+dataset_batches/
+└── batch_000/
+    └── faceswap/
+        ├── imagen_original/
+        ├── mascara_autentica/
+        ├── mascara_fake/
+        └── metadata.csv
 ```
 
 También genera previews en:
 
 ```text
-preview_faceswap_avanzado/
+dataset_batches/batch_000/preview_faceswap/
 ```
 
 ---
@@ -588,7 +811,7 @@ Este script genera una imagen comparativa en:
 comparativas_dataset/
 ```
 
-La comparación incluye:
+La comparación puede incluir:
 
 ```text
 imagen real
@@ -602,54 +825,107 @@ máscara auténtica del inpainting
 
 ---
 
-## Formato de salida
+# Unión de batches
 
-Cada tipo de manipulación genera:
+Después de generar todos los batches, estos pueden unirse en una carpeta global.
+
+Estructura final sugerida:
 
 ```text
-imagen_original/
-mascara_autentica/
-mascara_fake/
-metadata.csv
+dataset_global/
+├── imagen_original/
+├── mascara_autentica/
+├── mascara_fake/
+└── metadata.csv
 ```
 
-Las máscaras se guardan como imágenes binarias:
+La unión debe hacerse por código, copiando y conservando los nombres únicos:
 
 ```text
-0   = fondo o región no perteneciente a la clase
-255 = región correspondiente
+fs_b000_0000.png
+inp_b000_0000.png
+fs_b001_0000.png
+inp_b001_0000.png
+```
+
+Esto evita sobrescrituras.
+
+---
+
+# Separación train/test
+
+La separación recomendada es:
+
+```text
+90% train
+10% test
+```
+
+Para un dataset de 50,000 imágenes:
+
+```text
+45,000 train
+5,000 test
+```
+
+La separación debe hacerse preferentemente por `target_stem` o por ID base de FFHQ.
+
+Ejemplo correcto:
+
+```text
+ffhq_000123 faceswap     -> train
+ffhq_000123 inpainting   -> train
+```
+
+Ejemplo incorrecto:
+
+```text
+ffhq_000123 faceswap     -> train
+ffhq_000123 inpainting   -> test
+```
+
+Esto evita fuga de información entre entrenamiento y prueba.
+
+---
+
+# Control de calidad
+
+## Inpainting
+
+El script de inpainting incluye validación para evitar imágenes negras o inválidas.
+
+Se usan reintentos automáticos:
+
+```python
+MAX_RETRIES = 3
+```
+
+También se guardan en metadata:
+
+```text
+seed_used
+retry_used
+```
+
+Esto permite saber qué seed generó cada muestra.
+
+## FaceSwap
+
+El script de FaceSwap selecciona el rostro principal y evita casos ambiguos cuando hay varios rostros significativos.
+
+También guarda información como:
+
+```text
+target_faces_detected
+source_faces_detected
+face_selection
+target_face_area
+source_face_area
 ```
 
 ---
 
-## Metadata
-
-Cada carpeta de salida incluye un archivo:
-
-```text
-metadata.csv
-```
-
-Este archivo almacena información como:
-
-```text
-id
-tipo
-target_image
-source_image
-regions
-num_regions
-prompt
-imagen_original
-mascara_autentica
-mascara_fake
-```
-
-Los campos pueden variar dependiendo del tipo de manipulación.
-
----
-
-## Diferencias entre los métodos
+# Diferencias entre métodos
 
 | Método | Modelo | Tipo de manipulación | Máscara fake | Máscara auténtica | Usa GPU |
 |---|---|---|---|---|---|
@@ -658,7 +934,7 @@ Los campos pueden variar dependiendo del tipo de manipulación.
 
 ---
 
-## Tabla comparativa de resultados
+# Tabla comparativa de resultados
 
 En esta sección se puede colocar una tabla visual con ejemplos generados por ambos métodos.
 
@@ -676,25 +952,19 @@ Ejemplo:
 ![Comparación de resultados](assets/comparacion_real_faceswap_local_mascaras.png)
 ```
 
-Para usar esta opción, crear una carpeta:
-
-```text
-assets/
-```
-
-y colocar ahí una imagen comparativa ligera.
-
 ---
 
-## Archivos y carpetas no incluidos en GitHub
+# Archivos y carpetas no incluidos en GitHub
 
 Este repositorio no incluye:
 
 ```text
 data_raw/
 models/
-face_parsing_output/
-dataset_rostros_avanzado/
+face_parsing_output_faceswap/
+face_parsing_output_inpainting/
+dataset_batches/
+dataset_global/
 preview_faceswap_avanzado/
 preview_local_inpainting/
 comparativas_dataset/
@@ -714,7 +984,7 @@ Esto se controla mediante `.gitignore`.
 
 ---
 
-## Notas sobre Hugging Face
+# Notas sobre Hugging Face
 
 El modelo de inpainting se descarga desde Hugging Face la primera vez que se ejecuta el script.
 
@@ -736,7 +1006,7 @@ No es un error. Solo indica que la descarga puede ser más lenta o tener límite
 
 ---
 
-## Notas sobre rendimiento
+# Notas sobre rendimiento
 
 FaceSwap suele ser más rápido que inpainting porque usa un modelo ONNX más ligero.
 
@@ -751,7 +1021,7 @@ Ejemplo:
 Para acelerar pruebas iniciales se puede usar:
 
 ```python
-MAX_SAMPLES = 5
+MAX_NEW_SAMPLES = 100
 NUM_INFERENCE_STEPS = 10
 ```
 
@@ -763,9 +1033,9 @@ NUM_INFERENCE_STEPS = 20
 
 ---
 
-## Problemas comunes
+# Problemas comunes
 
-### PyTorch no detecta GPU
+## PyTorch no detecta GPU
 
 Verificar con:
 
@@ -779,7 +1049,7 @@ Debe mostrar:
 True
 ```
 
-### ONNX Runtime cae a CPU
+## ONNX Runtime cae a CPU
 
 Verificar que aparezca:
 
@@ -795,23 +1065,29 @@ Applied providers: ['CPUExecutionProvider']
 
 entonces ONNX no está usando GPU.
 
-### Error con cuDNN o CUDA
-
-Verificar que estén instaladas las dependencias:
-
-```text
-CUDA Toolkit
-onnxruntime-gpu[cuda,cudnn]
-PyTorch CUDA
-```
-
-### Primera ejecución de inpainting muy lenta
+## Primera ejecución de inpainting muy lenta
 
 Es normal si el modelo se está descargando por primera vez.
 
+## Warnings repetidos en FaceSwap
+
+InsightFace puede imprimir warnings de librerías internas durante el alineamiento facial. No necesariamente indican error.
+
+Pueden ocultarse con:
+
+```python
+import warnings
+
+warnings.filterwarnings(
+    "ignore",
+    category=FutureWarning,
+    module="insightface.*"
+)
+```
+
 ---
 
-## Estado actual del proyecto
+# Estado actual del proyecto
 
 - [x] Face parsing por regiones faciales
 - [x] Máscara `full_face` sin cabello, cuello ni orejas
@@ -822,7 +1098,20 @@ Es normal si el modelo se está descargando por primera vez.
 - [x] Inpainting acelerado por GPU usando PyTorch CUDA
 - [x] Máscaras binarias `mascara_fake` y `mascara_autentica`
 - [x] Metadata por muestra
+- [x] Generación por batches
+- [x] Nombres únicos por batch
+- [x] Validación contra imágenes negras en inpainting
 - [x] Script de comparación visual
+- [ ] Script final de unión global de batches
+- [ ] Script final de separación train/test
+- [ ] Integración con entrenamiento de U-Net dual decoder
 
 ---
 
+# Advertencia ética
+
+Este proyecto está diseñado con fines académicos y de investigación en detección y segmentación de manipulaciones faciales.
+
+El uso de técnicas de FaceSwap, inpainting o manipulación facial debe realizarse de manera responsable, respetando la privacidad, consentimiento y derechos de imagen de las personas involucradas.
+
+No se recomienda usar este proyecto para generar contenido engañoso, suplantación de identidad o distribución de imágenes manipuladas sin consentimiento.
