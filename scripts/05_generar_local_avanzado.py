@@ -11,16 +11,24 @@ from PIL import Image
 
 from diffusers import StableDiffusionInpaintPipeline
 
+BATCH_NUM = 0
+BATCH_SIZE = 1000
+MAX_NEW_SAMPLES = 1000
+IMAGE_SIZE = 512
+
+
+BATCH_NAME = f"batch_{BATCH_NUM:03d}"
+METHOD_NAME = "local_inpainting"
+METHOD_PREFIX = "inp"
 
 BASE_DIR = Path(r"C:\ALURA ONE\PythonProject\tesis_dataset")
-
 IMAGE_DIR = BASE_DIR / "data_raw" / "face_dataset" / "images_inpainting"
 MASK_BASE_DIR = BASE_DIR / "face_parsing_output_inpainting" / "binary_masks"
-OUTPUT_DIR = BASE_DIR / "dataset_rostros_avanzado" / "local_inpainting"
-PREVIEW_DIR = BASE_DIR / "preview_local_inpainting"
 
-IMAGE_SIZE = 512
-MAX_SAMPLES = 100
+OUTPUT_DIR = BASE_DIR / "dataset_batches" / BATCH_NAME / METHOD_NAME
+PREVIEW_DIR = BASE_DIR / "dataset_batches" / BATCH_NAME / f"preview_{METHOD_NAME}"
+
+
 
 REGIONS = ["left_eye", "right_eye", "nose", "lips","brows"]
 
@@ -228,13 +236,10 @@ def save_preview(sample_id, manipulated, authentic_mask, fake_mask):
     out_path = PREVIEW_DIR / f"{sample_id}.png"
     cv2.imwrite(str(out_path), grid)
 
-def get_next_sample_index():
-    """
-    Busca archivos local_inpaint_XXXXX.png existentes
-    y devuelve el siguiente índice disponible.
-    """
+def get_next_batch_index():
     img_dir = OUTPUT_DIR / "imagen_original"
-    existing_files = list(img_dir.glob("local_inpaint_*.png"))
+    pattern = f"{METHOD_PREFIX}_b{BATCH_NUM:03d}_*.png"
+    existing_files = list(img_dir.glob(pattern))
 
     if not existing_files:
         return 0
@@ -243,7 +248,8 @@ def get_next_sample_index():
 
     for file in existing_files:
         try:
-            idx = int(file.stem.replace("local_inpaint_", ""))
+            # inp_b000_0042 -> 0042
+            idx = int(file.stem.split("_")[-1])
             indices.append(idx)
         except ValueError:
             pass
@@ -273,6 +279,8 @@ def load_existing_metadata():
         processed_targets = set()
 
     return records, processed_targets
+
+
 def main():
     ensure_dirs()
 
@@ -293,20 +301,25 @@ def main():
         print("No hay imágenes válidas.")
         return
 
-    existing_files = list((OUTPUT_DIR / "imagen_original").glob("local_inpaint_*.png"))
     records, processed_targets = load_existing_metadata()
 
-    next_index = get_next_sample_index()
+    next_batch_index = get_next_batch_index()
     generated_this_run = 0
 
+    print(f"Batch actual: {BATCH_NAME}")
+    print(f"Método: {METHOD_NAME}")
     print(f"Muestras existentes en metadata: {len(records)}")
     print(f"Targets ya procesados: {len(processed_targets)}")
-    print(f"Siguiente índice de archivo: {next_index}")
+    print(f"Siguiente índice dentro del batch: {next_batch_index}")
 
     random.shuffle(items)
 
     for target_item in tqdm(items):
-        if generated_this_run >= MAX_SAMPLES:
+        if generated_this_run >= MAX_NEW_SAMPLES:
+            break
+
+        if next_batch_index >= BATCH_SIZE:
+            print(f"Batch {BATCH_NAME} completado.")
             break
 
         target_key = str(target_item["image_path"])
@@ -355,8 +368,9 @@ def main():
         input_pil = cv2_to_pil_rgb(target_img)
         mask_pil = mask_to_pil(inpaint_mask)
 
-        generator = torch.Generator(device="cpu").manual_seed(RANDOM_SEED + next_index)
-
+        generator = torch.Generator(device="cpu").manual_seed(
+            RANDOM_SEED + (BATCH_NUM * BATCH_SIZE) + next_batch_index
+        )
         try:
             result = pipe(
                 prompt=prompt,
@@ -375,7 +389,7 @@ def main():
 
         manipulated_img = pil_to_cv2_bgr(result)
 
-        sample_id = f"local_inpaint_{next_index:05d}"
+        sample_id = f"{METHOD_PREFIX}_b{BATCH_NUM:03d}_{next_batch_index:04d}"
 
         img_path, auth_path, fake_path = save_sample(
             sample_id,
@@ -388,7 +402,12 @@ def main():
 
         records.append({
             "id": sample_id,
-            "tipo": "local_inpainting",
+            "tipo": METHOD_NAME,
+            "batch": BATCH_NAME,
+            "batch_num": BATCH_NUM,
+            "batch_index": next_batch_index,
+            "global_index": BATCH_NUM * BATCH_SIZE + next_batch_index,
+            "target_stem": target_item["stem"],
             "regions": ",".join(selected_regions),
             "num_regions": len(selected_regions),
             "target_image": str(target_item["image_path"]),
@@ -402,7 +421,7 @@ def main():
         metadata_path = OUTPUT_DIR / "metadata.csv"
         pd.DataFrame(records).to_csv(metadata_path, index=False)
 
-        next_index += 1
+        next_batch_index += 1
         generated_this_run += 1
 
     metadata_path = OUTPUT_DIR / "metadata.csv"
