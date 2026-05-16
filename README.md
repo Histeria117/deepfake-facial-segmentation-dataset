@@ -25,12 +25,12 @@ El objetivo es producir imágenes manipuladas junto con máscaras binarias que i
 Dataset utilizado:
 
 ```text
-FFHQ
+FFHQ https://drive.google.com/drive/folders/1tZUcXDBeOibC6jcMCtgRRz67pzrAHeHL
 Imágenes utilizadas: 1024x1024
 1000 imágenes por carpeta / batch
 ```
 
-La generación se divide en tandas de 1000 imágenes para mantener control del proceso, evitar sobrescrituras y permitir que diferentes personas generen partes del dataset de forma independiente.
+La generación se divide en tandas de 1000 imágenes para mantener control del proceso
 
 ## Angel
 
