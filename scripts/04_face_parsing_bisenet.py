@@ -1,36 +1,37 @@
-import os
 import cv2
 import torch
 import numpy as np
+
 from pathlib import Path
 from tqdm import tqdm
 from torchvision.transforms.functional import normalize
 from facexlib.parsing import init_parsing_model
 
 
-BASE_DIR = Path(r"C:\ALURA ONE\PythonProject\tesis_dataset")
-#Input dir_faceswap
-INPUT_DIR = BASE_DIR / "data_raw" / "face_dataset" / "images_faceswap"
+# ============================================================
+# RUTAS DEL PROYECTO
+# ============================================================
 
-#Output dir_faceswap
-OUTPUT_DIR = BASE_DIR / "face_parsing_output_faceswap"
-#----------------------------------------------------------------------------
+DIR_PRINCIPAL = Path(r"C:\ALURA ONE\PythonProject\tesis_dataset")
 
-#Input dir_inpainting
-#INPUT_DIR = BASE_DIR / "data_raw" / "face_dataset" / "images_inpainting"
+# ------------------------------------------------------------
+# Configuración para FaceSwap
+# ------------------------------------------------------------
 
-#Output dir_inpainting
-#OUTPUT_DIR = BASE_DIR / "face_parsing_output_inpainting"
+DIR_ENTRADA = DIR_PRINCIPAL / "data_raw" / "face_dataset" / "images_faceswap"
+DIR_SALIDA = DIR_PRINCIPAL / "face_parsing_output_faceswap"
+
+# ------------------------------------------------------------
+# Configuración para Inpainting
+# ------------------------------------------------------------
+
+# DIR_ENTRADA = DIR_PRINCIPAL / "data_raw" / "face_dataset" / "images_inpainting"
+# DIR_SALIDA = DIR_PRINCIPAL / "face_parsing_output_inpainting"
 
 
+TAM_IMAGEN = 512
 
-
-
-
-IMAGE_SIZE = 512
-
-# Clases típicas de face parsing (CelebAMask-HQ / BiSeNet)
-LABELS = {
+ETIQUETAS = {
     "background": [0],
     "skin": [1],
     "left_brow": [2],
@@ -52,195 +53,251 @@ LABELS = {
     "hat": [18],
 }
 
-# Máscaras que nos interesan para tu proyecto
-REGION_MAP = {
+
+MAPA_REGIONES = {
     "left_eye": [4],
     "right_eye": [5],
     "nose": [10],
     "mouth": [11],
     "lips": [12, 13],
     "brows": [2, 3],
-    # full_face interna, útil para fake/authentic mask
-    "full_face": [1, 2, 3, 4, 5,6, 10, 11, 12, 13],
+    "full_face": [1, 2, 3, 4, 5, 6, 10, 11, 12, 13],
 }
 
-
-def ensure_dirs():
-    folders = [
+def crear_directorios():
+    carpetas = [
         "parsing_index",
         "preview",
     ]
 
-    for region in REGION_MAP.keys():
-        folders.append(f"binary_masks/{region}")
+    for region in MAPA_REGIONES.keys():
+        carpetas.append(f"binary_masks/{region}")
 
-    for folder in folders:
-        (OUTPUT_DIR / folder).mkdir(parents=True, exist_ok=True)
-
-
-def get_image_files():
-    valid_ext = [".jpg", ".jpeg", ".png", ".bmp", ".webp"]
-    files = []
-
-    for path in INPUT_DIR.rglob("*"):
-        if path.suffix.lower() in valid_ext:
-            files.append(path)
-
-    return sorted(files)
+    for carpeta in carpetas:
+        (DIR_SALIDA / carpeta).mkdir(parents=True, exist_ok=True)
 
 
-def read_image(path):
-    img = cv2.imread(str(path))
-    if img is None:
+
+def obtener_archivos_imagen():
+    extensiones_validas = [".jpg", ".jpeg", ".png", ".bmp", ".webp"]
+    archivos = []
+
+    for ruta in DIR_ENTRADA.rglob("*"):
+        if ruta.suffix.lower() in extensiones_validas:
+            archivos.append(ruta)
+
+    return sorted(archivos)
+
+
+def leer_imagen(ruta):
+    imagen = cv2.imread(str(ruta))
+
+    if imagen is None:
         return None
-    img = cv2.resize(img, (IMAGE_SIZE, IMAGE_SIZE), interpolation=cv2.INTER_AREA)
-    return img
 
+    imagen = cv2.resize(
+        imagen,
+        (TAM_IMAGEN, TAM_IMAGEN),
+        interpolation=cv2.INTER_AREA
+    )
 
-def preprocess_for_parser(img_bgr, device):
-    # BGR -> RGB
-    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-    img = img_rgb.astype(np.float32) / 255.0
-    img = torch.from_numpy(np.transpose(img, (2, 0, 1))).float()
-    normalize(img, (0.485, 0.456, 0.406), (0.229, 0.224, 0.225), inplace=True)
-    img = img.unsqueeze(0).to(device)
-    return img
+    return imagen
 
+def preprocesar_para_parser(imagen_bgr, dispositivo):
+    imagen_rgb = cv2.cvtColor(imagen_bgr, cv2.COLOR_BGR2RGB)
+    imagen = imagen_rgb.astype(np.float32) / 255.0
+    imagen = torch.from_numpy(
+        np.transpose(imagen, (2, 0, 1))
+    ).float()
+    normalize(
+        imagen,
+        (0.485, 0.456, 0.406),
+        (0.229, 0.224, 0.225),
+        inplace=True
+    )
+    imagen = imagen.unsqueeze(0).to(dispositivo)
+    return imagen
 
-def parse_image(parser, img_bgr, device):
-    x = preprocess_for_parser(img_bgr, device)
+def segmentar_imagen(modelo_parser, imagen_bgr, dispositivo):
+    entrada = preprocesar_para_parser(imagen_bgr, dispositivo)
 
     with torch.no_grad():
-        out = parser(x)[0]  # shape: [1, C, H, W] o similar
-        if out.dim() == 4:
-            out = out.squeeze(0)
-        parsing = out.argmax(dim=0).cpu().numpy().astype(np.uint8)
+        salida = modelo_parser(entrada)[0]
 
-    return parsing
+        if salida.dim() == 4:
+            salida = salida.squeeze(0)
+        mapa_parsing = salida.argmax(dim=0).cpu().numpy().astype(np.uint8)
 
-
-def build_binary_mask(parsing_map, class_ids):
-    mask = np.isin(parsing_map, class_ids).astype(np.uint8) * 255
-    return mask
+    return mapa_parsing
 
 
-def colorize_parsing(parsing_map):
-    # Paleta simple para visualización
-    color_table = {
+def construir_mascara_binaria(mapa_parsing, ids_clase):
+    mascara = np.isin(mapa_parsing, ids_clase).astype(np.uint8) * 255
+    return mascara
+
+
+def colorear_mapa_parsing(mapa_parsing):
+    tabla_colores = {
         0: (0, 0, 0),
-        1: (255, 220, 180),   # skin
-        2: (0, 255, 0),       # left brow
-        3: (0, 200, 0),       # right brow
-        4: (255, 0, 0),       # left eye
-        5: (200, 0, 0),       # right eye
-        6: (255, 255, 0),     # glasses
-        7: (255, 0, 255),     # left ear
-        8: (200, 0, 255),     # right ear
-        9: (255, 128, 0),     # ear ring
-        10: (0, 255, 255),    # nose
-        11: (0, 128, 255),    # mouth
-        12: (128, 0, 255),    # upper lip
-        13: (255, 0, 128),    # lower lip
-        14: (128, 128, 0),    # neck
-        15: (128, 255, 0),    # necklace
-        16: (128, 128, 128),  # cloth
-        17: (80, 80, 255),    # hair
-        18: (255, 255, 255),  # hat
+        1: (255, 220, 180),    # piel
+        2: (0, 255, 0),        # ceja izquierda
+        3: (0, 200, 0),        # ceja derecha
+        4: (255, 0, 0),        # ojo izquierdo
+        5: (200, 0, 0),        # ojo derecho
+        6: (255, 255, 0),      # lentes
+        7: (255, 0, 255),      # oreja izquierda
+        8: (200, 0, 255),      # oreja derecha
+        9: (255, 128, 0),      # arete
+        10: (0, 255, 255),     # nariz
+        11: (0, 128, 255),     # boca
+        12: (128, 0, 255),     # labio superior
+        13: (255, 0, 128),     # labio inferior
+        14: (128, 128, 0),     # cuello
+        15: (128, 255, 0),     # collar
+        16: (128, 128, 128),   # pañuelo
+        17: (80, 80, 255),     # cabello
+        18: (255, 255, 255),   # sombrero
     }
 
-    h, w = parsing_map.shape
-    color = np.zeros((h, w, 3), dtype=np.uint8)
+    alto, ancho = mapa_parsing.shape
+    imagen_color = np.zeros((alto, ancho, 3), dtype=np.uint8)
 
-    for cls_id, rgb in color_table.items():
-        color[parsing_map == cls_id] = rgb
+    for id_clase, color_rgb in tabla_colores.items():
+        imagen_color[mapa_parsing == id_clase] = color_rgb
 
-    return color
+    return imagen_color
 
+def crear_preview(
+    imagen_bgr,
+    mapa_parsing_color,
+    mascara_full_face,
+    mascara_ojo_izquierdo,
+    mascara_ojo_derecho,
+    mascara_nariz,
+    mascara_labios
+):
+    mascaras = []
 
-def make_preview(img_bgr, parsing_color, full_face_mask, left_eye_mask, right_eye_mask, nose_mask, lips_mask):
-    # Convertir máscaras a 3 canales
-    masks = []
-    for m in [full_face_mask, left_eye_mask, right_eye_mask, nose_mask, lips_mask]:
-        masks.append(cv2.cvtColor(m, cv2.COLOR_GRAY2BGR))
+    for mascara in [
+        mascara_full_face,
+        mascara_ojo_izquierdo,
+        mascara_ojo_derecho,
+        mascara_nariz,
+        mascara_labios
+    ]:
+        mascaras.append(cv2.cvtColor(mascara, cv2.COLOR_GRAY2BGR))
 
-    grid_top = np.hstack([img_bgr, parsing_color])
-    grid_bottom = np.hstack(masks)
+    fila_superior = np.hstack([
+        imagen_bgr,
+        mapa_parsing_color
+    ])
 
-    # Ajustar anchos para concatenar verticalmente
-    w_top = grid_top.shape[1]
-    w_bottom = grid_bottom.shape[1]
+    fila_inferior = np.hstack(mascaras)
+    ancho_superior = fila_superior.shape[1]
+    ancho_inferior = fila_inferior.shape[1]
 
-    if w_bottom < w_top:
-        pad = np.zeros((grid_bottom.shape[0], w_top - w_bottom, 3), dtype=np.uint8)
-        grid_bottom = np.hstack([grid_bottom, pad])
-    elif w_top < w_bottom:
-        pad = np.zeros((grid_top.shape[0], w_bottom - w_top, 3), dtype=np.uint8)
-        grid_top = np.hstack([grid_top, pad])
+    if ancho_inferior < ancho_superior:
+        relleno = np.zeros(
+            (fila_inferior.shape[0], ancho_superior - ancho_inferior, 3),
+            dtype=np.uint8
+        )
+        fila_inferior = np.hstack([fila_inferior, relleno])
 
-    preview = np.vstack([grid_top, grid_bottom])
+    elif ancho_superior < ancho_inferior:
+        relleno = np.zeros(
+            (fila_superior.shape[0], ancho_inferior - ancho_superior, 3),
+            dtype=np.uint8
+        )
+        fila_superior = np.hstack([fila_superior, relleno])
+
+    preview = np.vstack([
+        fila_superior,
+        fila_inferior
+    ])
+
     return preview
+def principal():
+    crear_directorios()
 
-
-def main():
-    ensure_dirs()
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print("Dispositivo:", device)
+    dispositivo = "cuda" if torch.cuda.is_available() else "cpu"
+    print("Dispositivo:", dispositivo)
 
     print("Cargando modelo de face parsing...")
-    parser = init_parsing_model(model_name="bisenet", device=device)
-    parser.eval()
+    modelo_parser = init_parsing_model(
+        model_name="bisenet",
+        device=dispositivo
+    )
 
-    image_files = get_image_files()
-    print("Imágenes encontradas:", len(image_files))
+    modelo_parser.eval()
 
-    if len(image_files) == 0:
-        print("No se encontraron imágenes en:", INPUT_DIR)
+    archivos_imagen = obtener_archivos_imagen()
+    print("Imágenes encontradas:", len(archivos_imagen))
+
+    if len(archivos_imagen) == 0:
+        print("No se encontraron imágenes en:", DIR_ENTRADA)
         return
 
-    for img_path in tqdm(image_files):
-        img = read_image(img_path)
-        if img is None:
+    for ruta_imagen in tqdm(archivos_imagen):
+        imagen = leer_imagen(ruta_imagen)
+
+        if imagen is None:
             continue
 
         try:
-            parsing_map = parse_image(parser, img, device)
-        except Exception as e:
-            print(f"Error procesando {img_path.name}: {e}")
-            continue
-
-        stem = img_path.stem
-
-        # Guardar parsing indexado
-        cv2.imwrite(str(OUTPUT_DIR / "parsing_index" / f"{stem}.png"), parsing_map)
-
-        # Construir máscaras binarias
-        region_masks = {}
-        for region_name, class_ids in REGION_MAP.items():
-            mask = build_binary_mask(parsing_map, class_ids)
-            region_masks[region_name] = mask
-            cv2.imwrite(
-                str(OUTPUT_DIR / "binary_masks" / region_name / f"{stem}.png"),
-                mask
+            mapa_parsing = segmentar_imagen(
+                modelo_parser,
+                imagen,
+                dispositivo
             )
 
-        parsing_color = colorize_parsing(parsing_map)
+        except Exception as error:
+            print(f"Error procesando {ruta_imagen.name}: {error}")
+            continue
 
-        preview = make_preview(
-            img,
-            parsing_color,
-            region_masks["full_face"],
-            region_masks["left_eye"],
-            region_masks["right_eye"],
-            region_masks["nose"],
-            region_masks["lips"],
+        nombre_sin_extension = ruta_imagen.stem
+
+        cv2.imwrite(
+            str(DIR_SALIDA / "parsing_index" / f"{nombre_sin_extension}.png"),
+            mapa_parsing
         )
 
-        cv2.imwrite(str(OUTPUT_DIR / "preview" / f"{stem}.png"), preview)
+        for nombre_region, ids_clase in MAPA_REGIONES.items():
+            mascara = construir_mascara_binaria(
+                mapa_parsing,
+                ids_clase
+            )
+
+            mascaras_region[nombre_region] = mascara
+
+            cv2.imwrite(
+                str(
+                    DIR_SALIDA
+                    / "binary_masks"
+                    / nombre_region
+                    / f"{nombre_sin_extension}.png"
+                ),
+                mascara
+            )
+
+        mapa_parsing_color = colorear_mapa_parsing(mapa_parsing)
+
+        preview = crear_preview(
+            imagen,
+            mapa_parsing_color,
+            mascaras_region["full_face"],
+            mascaras_region["left_eye"],
+            mascaras_region["right_eye"],
+            mascaras_region["nose"],
+            mascaras_region["lips"],
+        )
+
+        cv2.imwrite(
+            str(DIR_SALIDA / "preview" / f"{nombre_sin_extension}.png"),
+            preview
+        )
 
     print("Proceso terminado.")
-    print("Salida:", OUTPUT_DIR)
-
+    print("Salida:", DIR_SALIDA)
 
 if __name__ == "__main__":
-    main()
+    principal()

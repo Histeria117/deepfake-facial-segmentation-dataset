@@ -1,13 +1,9 @@
-import os
 import cv2
 import random
 import numpy as np
 import pandas as pd
 from pathlib import Path
 from tqdm import tqdm
-import onnxruntime as ort
-import site
-import sysconfig
 import warnings
 
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -16,6 +12,7 @@ warnings.filterwarnings(
     category=FutureWarning,
     module="insightface.*"
 )
+
 # Importar torch primero evita conflictos de DLL con cuDNN en Windows.
 # PyTorch carga sus propias DLLs CUDA/cuDNN.
 try:
@@ -23,8 +20,8 @@ try:
     print("Torch importado correctamente.")
     print("Torch:", torch.__version__)
     print("Torch CUDA disponible:", torch.cuda.is_available())
-except Exception as e:
-    print("Error importando torch:", e)
+except Exception as error:
+    print("Error importando torch:", error)
     raise
 
 import onnxruntime as ort
@@ -34,95 +31,168 @@ try:
     # incluyendo las cargadas por PyTorch.
     ort.preload_dlls(cuda=True, cudnn=True, msvc=True)
     print("ONNX Runtime DLLs precargadas.")
-except Exception as e:
-    print("No se pudieron precargar DLLs con ONNX Runtime:", e)
+except Exception as error:
+    print("No se pudieron precargar DLLs con ONNX Runtime:", error)
 
 print("ONNX providers disponibles:", ort.get_available_providers())
 
 from insightface.app import FaceAnalysis
 from insightface.model_zoo import get_model
-from insightface.app import FaceAnalysis
-from insightface.model_zoo import get_model
-
-BATCH_NUM = 0
-BATCH_SIZE = 1000
-MAX_NEW_SAMPLES = 1000
-IMAGE_SIZE = 512
-USE_GPU = True
-random.seed(45)
-
-BATCH_NAME = f"batch_{BATCH_NUM:03d}"
-METHOD_NAME = "faceswap"
-METHOD_PREFIX = "fs"
-BASE_DIR = Path(r"C:\ALURA ONE\PythonProject\tesis_dataset")
-IMAGE_DIR = BASE_DIR / "data_raw" / "face_dataset" / "images_faceswap"
-MASK_BASE_DIR = BASE_DIR / "face_parsing_output_faceswap" / "binary_masks"
-OUTPUT_DIR = BASE_DIR / "dataset_batches" / BATCH_NAME / METHOD_NAME
-PREVIEW_DIR = BASE_DIR / "dataset_batches" / BATCH_NAME / f"preview_{METHOD_NAME}"
-MODEL_PATH = BASE_DIR / "models" / "insightface" / "inswapper_128.onnx"
 
 
-def ensure_dirs():
-    for folder in [
-        OUTPUT_DIR / "imagen_original",
-        OUTPUT_DIR / "mascara_autentica",
-        OUTPUT_DIR / "mascara_fake",
-        PREVIEW_DIR
-    ]:
-        folder.mkdir(parents=True, exist_ok=True)
-def get_image_files():
-    valid_ext = [".jpg", ".jpeg", ".png", ".bmp", ".webp"]
-    files = []
-    for p in IMAGE_DIR.rglob("*"):
-        if p.suffix.lower() in valid_ext:
-            files.append(p)
-    return sorted(files)
-def read_image(path):
-    img = cv2.imread(str(path))
-    if img is None:
+# ============================================================
+# CONFIGURACIÓN DE BATCH
+# ============================================================
+
+NUMERO_DE_BATCH = 3
+TAM_BATCH = 1000
+NUM_MAX_MUESTRAS = 1000
+TAM_IMAGEN = 512
+
+USAR_GPU = True
+SEMILLA_ALEATORIA = 45
+
+random.seed(SEMILLA_ALEATORIA)
+
+NOMBRE_BATCH = f"batch_{NUMERO_DE_BATCH:03d}"
+TIPO_DEEPFAKE = "faceswap"
+PREFIJO_DEEPFAKE = "fs"
+
+
+# ============================================================
+# RUTAS DEL PROYECTO
+# ============================================================
+
+DIR_PRINCIPAL = Path(r"C:\ALURA ONE\PythonProject\tesis_dataset")
+
+DIR_IMAGEN_BASE = DIR_PRINCIPAL / "data_raw" / "face_dataset" / "images_faceswap"
+DIR_MASK_BINARIAS = DIR_PRINCIPAL / "face_parsing_output_faceswap" / "binary_masks"
+
+DIR_FINAL_OUT = DIR_PRINCIPAL / "dataset_batches" / NOMBRE_BATCH / TIPO_DEEPFAKE
+DIR_PREVIEW = DIR_PRINCIPAL / "dataset_batches" / NOMBRE_BATCH / f"preview_{TIPO_DEEPFAKE}"
+
+RUTA_MODELO = DIR_PRINCIPAL / "models" / "insightface" / "inswapper_128.onnx"
+
+
+# ============================================================
+# DIRECTORIOS
+# ============================================================
+
+def crear_directorios():
+    carpetas = [
+        DIR_FINAL_OUT / "imagen_original",
+        DIR_FINAL_OUT / "mascara_autentica",
+        DIR_FINAL_OUT / "mascara_fake",
+        DIR_PREVIEW
+    ]
+
+    for carpeta in carpetas:
+        carpeta.mkdir(parents=True, exist_ok=True)
+
+
+# ============================================================
+# LECTURA DE IMÁGENES Y MÁSCARAS
+# ============================================================
+
+def obtener_archivos_imagen():
+    extensiones_validas = [".jpg", ".jpeg", ".png", ".bmp", ".webp"]
+    archivos = []
+
+    for ruta in DIR_IMAGEN_BASE.rglob("*"):
+        if ruta.suffix.lower() in extensiones_validas:
+            archivos.append(ruta)
+
+    return sorted(archivos)
+
+
+def leer_imagen(ruta):
+    imagen = cv2.imread(str(ruta))
+
+    if imagen is None:
         return None
-    img = cv2.resize(img, (IMAGE_SIZE, IMAGE_SIZE), interpolation=cv2.INTER_AREA)
-    return img
 
-def read_mask(mask_path):
-    if not mask_path.exists():
-        return None
-    mask = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
-    if mask is None:
-        return None
-    if mask.shape[:2] != (IMAGE_SIZE, IMAGE_SIZE):
-        mask = cv2.resize(mask, (IMAGE_SIZE, IMAGE_SIZE), interpolation=cv2.INTER_NEAREST)
-    _, mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
-    return mask
+    imagen = cv2.resize(
+        imagen,
+        (TAM_IMAGEN, TAM_IMAGEN),
+        interpolation=cv2.INTER_AREA
+    )
+
+    return imagen
 
 
-def get_masks_for_image(stem):
-    full_face = read_mask(MASK_BASE_DIR / "full_face" / f"{stem}.png")
-
-    if full_face is None:
+def leer_mascara(ruta_mascara):
+    if not ruta_mascara.exists():
         return None
 
-    if np.sum(full_face) == 0:
+    mascara = cv2.imread(str(ruta_mascara), cv2.IMREAD_GRAYSCALE)
+
+    if mascara is None:
+        return None
+
+    if mascara.shape[:2] != (TAM_IMAGEN, TAM_IMAGEN):
+        mascara = cv2.resize(
+            mascara,
+            (TAM_IMAGEN, TAM_IMAGEN),
+            interpolation=cv2.INTER_NEAREST
+        )
+
+    _, mascara = cv2.threshold(mascara, 127, 255, cv2.THRESH_BINARY)
+
+    return mascara
+
+
+def obtener_mascaras_de_imagen(nombre_sin_extension):
+    mascara_rostro_completo = leer_mascara(
+        DIR_MASK_BINARIAS / "full_face" / f"{nombre_sin_extension}.png"
+    )
+
+    if mascara_rostro_completo is None:
+        return None
+
+    if np.sum(mascara_rostro_completo) == 0:
         return None
 
     return {
-        "full_face": full_face
+        "full_face": mascara_rostro_completo
     }
 
-def get_next_batch_index():
-    img_dir = OUTPUT_DIR / "imagen_original"
-    pattern = f"{METHOD_PREFIX}_b{BATCH_NUM:03d}_*.png"
-    existing_files = list(img_dir.glob(pattern))
 
-    if not existing_files:
+def obtener_item_valido(ruta_imagen):
+    nombre_sin_extension = ruta_imagen.stem
+    mascaras = obtener_mascaras_de_imagen(nombre_sin_extension)
+
+    if mascaras is None:
+        return None
+
+    if np.sum(mascaras["full_face"]) == 0:
+        return None
+
+    return {
+        "image_path": ruta_imagen,
+        "stem": nombre_sin_extension,
+        "masks": mascaras
+    }
+
+
+# ============================================================
+# CONTROL DE BATCH Y CONTINUACIÓN
+# ============================================================
+
+def obtener_siguiente_indice_batch():
+    dir_imagenes = DIR_FINAL_OUT / "imagen_original"
+    patron = f"{PREFIJO_DEEPFAKE}_b{NUMERO_DE_BATCH:03d}_*.png"
+
+    archivos_existentes = list(dir_imagenes.glob(patron))
+
+    if not archivos_existentes:
         return 0
 
     indices = []
 
-    for file in existing_files:
+    for archivo in archivos_existentes:
         try:
-            idx = int(file.stem.split("_")[-1])
-            indices.append(idx)
+            indice = int(archivo.stem.split("_")[-1])
+            indices.append(indice)
         except ValueError:
             pass
 
@@ -131,54 +201,47 @@ def get_next_batch_index():
 
     return max(indices) + 1
 
-def load_existing_metadata():
+
+def cargar_metadata_existente():
     """
     Carga metadata existente para poder continuar sin repetir imágenes base.
     """
-    metadata_path = OUTPUT_DIR / "metadata.csv"
+    ruta_metadata = DIR_FINAL_OUT / "metadata.csv"
 
-    if not metadata_path.exists():
+    if not ruta_metadata.exists():
         return [], set()
 
-    df = pd.read_csv(metadata_path)
+    dataframe = pd.read_csv(ruta_metadata)
+    registros = dataframe.to_dict("records")
 
-    records = df.to_dict("records")
-
-    if "target_image" in df.columns:
-        processed_targets = set(df["target_image"].astype(str).tolist())
+    if "target_image" in dataframe.columns:
+        targets_procesados = set(dataframe["target_image"].astype(str).tolist())
     else:
-        processed_targets = set()
+        targets_procesados = set()
 
-    return records, processed_targets
-
-def valid_item(image_path):
-    stem = image_path.stem
-    masks = get_masks_for_image(stem)
-    if masks is None:
-        return None
-
-    if np.sum(masks["full_face"]) == 0:
-        return None
-
-    return {
-        "image_path": image_path,
-        "stem": stem,
-        "masks": masks
-    }
+    return registros, targets_procesados
 
 
-def get_face_area(face):
-    bbox = face.bbox.astype(int)
+# ============================================================
+# SELECCIÓN DE ROSTRO PRINCIPAL
+# ============================================================
+
+def calcular_area_rostro(rostro):
+    bbox = rostro.bbox.astype(int)
     x1, y1, x2, y2 = bbox
-    return max(0, x2 - x1) * max(0, y2 - y1)
+
+    ancho = max(0, x2 - x1)
+    alto = max(0, y2 - y1)
+
+    return ancho * alto
 
 
-def choose_main_face(
-    faces,
-    img_shape,
-    min_main_area_ratio=0.06,
-    min_significant_area_ratio=0.025,
-    ambiguity_ratio=0.60
+def elegir_rostro_principal(
+    rostros,
+    forma_imagen,
+    ratio_min_area_principal=0.06,
+    ratio_min_area_significativa=0.025,
+    ratio_ambiguedad=0.60
 ):
     """
     Selecciona el rostro principal.
@@ -189,172 +252,227 @@ def choose_main_face(
     - Descarta solo si hay otro rostro grande cercano en tamaño.
     """
 
-    if faces is None or len(faces) == 0:
+    if rostros is None or len(rostros) == 0:
         return None, "no_faces", 0
 
-    h, w = img_shape[:2]
-    img_area = h * w
+    alto, ancho = forma_imagen[:2]
+    area_imagen = alto * ancho
 
-    faces_sorted = sorted(faces, key=get_face_area, reverse=True)
+    rostros_ordenados = sorted(
+        rostros,
+        key=calcular_area_rostro,
+        reverse=True
+    )
 
-    main_face = faces_sorted[0]
-    main_area = get_face_area(main_face)
-    main_ratio = main_area / img_area
+    rostro_principal = rostros_ordenados[0]
+    area_principal = calcular_area_rostro(rostro_principal)
+    ratio_principal = area_principal / area_imagen
 
-    if main_ratio < min_main_area_ratio:
-        return None, f"main_face_too_small_{main_ratio:.3f}", len(faces)
+    if ratio_principal < ratio_min_area_principal:
+        return None, f"main_face_too_small_{ratio_principal:.3f}", len(rostros)
 
-    significant_faces = [
-        f for f in faces_sorted
-        if (get_face_area(f) / img_area) >= min_significant_area_ratio
+    rostros_significativos = [
+        rostro
+        for rostro in rostros_ordenados
+        if (calcular_area_rostro(rostro) / area_imagen) >= ratio_min_area_significativa
     ]
 
-    if len(significant_faces) >= 2:
-        second_area = get_face_area(significant_faces[1])
-        second_vs_main = second_area / max(main_area, 1)
+    if len(rostros_significativos) >= 2:
+        area_segundo = calcular_area_rostro(rostros_significativos[1])
+        segundo_vs_principal = area_segundo / max(area_principal, 1)
 
-        if second_vs_main >= ambiguity_ratio:
-            return None, f"ambiguous_faces_{second_vs_main:.2f}", len(faces)
+        if segundo_vs_principal >= ratio_ambiguedad:
+            return None, f"ambiguous_faces_{segundo_vs_principal:.2f}", len(rostros)
 
-    return main_face, "ok", len(faces)
+    return rostro_principal, "ok", len(rostros)
 
-    def face_area(face):
-        bbox = face.bbox.astype(int)
-        x1, y1, x2, y2 = bbox
-        return max(0, x2 - x1) * max(0, y2 - y1)
 
-    return max(faces, key=face_area)
-def mask_for_selected_face(full_face_mask, face, padding_ratio=0.30):
+# ============================================================
+# MÁSCARAS
+# ============================================================
+
+def crear_mascara_para_rostro_seleccionado(
+    mascara_rostro_completo,
+    rostro,
+    ratio_padding=0.30
+):
     """
     Recorta la máscara full_face usando el bbox del rostro seleccionado.
     Esto evita que la mascara_fake tome otro rostro si hay más de una cara.
     """
 
-    if face is None:
+    if rostro is None:
         return None
 
-    h, w = full_face_mask.shape
+    alto, ancho = mascara_rostro_completo.shape
 
-    x1, y1, x2, y2 = face.bbox.astype(int)
+    x1, y1, x2, y2 = rostro.bbox.astype(int)
 
-    bw = max(1, x2 - x1)
-    bh = max(1, y2 - y1)
+    ancho_bbox = max(1, x2 - x1)
+    alto_bbox = max(1, y2 - y1)
 
-    pad_x = int(bw * padding_ratio)
-    pad_y = int(bh * padding_ratio)
+    padding_x = int(ancho_bbox * ratio_padding)
+    padding_y = int(alto_bbox * ratio_padding)
 
-    x1 = max(0, x1 - pad_x)
-    y1 = max(0, y1 - pad_y)
-    x2 = min(w, x2 + pad_x)
-    y2 = min(h, y2 + pad_y)
+    x1 = max(0, x1 - padding_x)
+    y1 = max(0, y1 - padding_y)
+    x2 = min(ancho, x2 + padding_x)
+    y2 = min(alto, y2 + padding_y)
 
-    bbox_mask = np.zeros_like(full_face_mask)
-    bbox_mask[y1:y2, x1:x2] = 255
+    mascara_bbox = np.zeros_like(mascara_rostro_completo)
+    mascara_bbox[y1:y2, x1:x2] = 255
 
-    selected_mask = cv2.bitwise_and(full_face_mask, bbox_mask)
+    mascara_seleccionada = cv2.bitwise_and(
+        mascara_rostro_completo,
+        mascara_bbox
+    )
 
-    if np.sum(selected_mask) == 0:
+    if np.sum(mascara_seleccionada) == 0:
         return None
 
-    _, selected_mask = cv2.threshold(selected_mask, 127, 255, cv2.THRESH_BINARY)
+    _, mascara_seleccionada = cv2.threshold(
+        mascara_seleccionada,
+        127,
+        255,
+        cv2.THRESH_BINARY
+    )
 
-    return selected_mask
+    return mascara_seleccionada
 
-def init_models():
-    if not MODEL_PATH.exists():
+
+def limpiar_mascara_binaria(mascara):
+    _, mascara = cv2.threshold(mascara, 127, 255, cv2.THRESH_BINARY)
+
+    kernel = np.ones((7, 7), np.uint8)
+    mascara = cv2.morphologyEx(mascara, cv2.MORPH_CLOSE, kernel)
+
+    alto, ancho = mascara.shape
+
+    mascara_flood = mascara.copy()
+    mascara_auxiliar = np.zeros((alto + 2, ancho + 2), np.uint8)
+
+    cv2.floodFill(mascara_flood, mascara_auxiliar, (0, 0), 255)
+
+    mascara_flood_invertida = cv2.bitwise_not(mascara_flood)
+    mascara_rellena = cv2.bitwise_or(mascara, mascara_flood_invertida)
+
+    _, mascara_rellena = cv2.threshold(
+        mascara_rellena,
+        127,
+        255,
+        cv2.THRESH_BINARY
+    )
+
+    return mascara_rellena
+
+
+def crear_mascaras_fake_y_autentica(mascaras, rostro_target):
+    mascara_rostro_completo = mascaras["full_face"].copy()
+
+    mascara_fake = crear_mascara_para_rostro_seleccionado(
+        mascara_rostro_completo,
+        rostro_target
+    )
+
+    if mascara_fake is None:
+        return None, None
+
+    mascara_fake = limpiar_mascara_binaria(mascara_fake)
+
+    mascara_autentica = np.zeros_like(mascara_fake)
+
+    return mascara_fake, mascara_autentica
+
+
+# ============================================================
+# INICIALIZACIÓN DE MODELOS
+# ============================================================
+
+def inicializar_modelos():
+    if not RUTA_MODELO.exists():
         raise FileNotFoundError(
-            f"No encontré el modelo en:\n{MODEL_PATH}\n"
+            f"No encontré el modelo en:\n{RUTA_MODELO}\n"
             "Coloca ahí el archivo inswapper_128.onnx"
         )
 
-    providers = ["CPUExecutionProvider"]
-    ctx_id = -1
+    proveedores = ["CPUExecutionProvider"]
+    id_contexto = -1
 
-    if USE_GPU:
-        providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-        ctx_id = 0
+    if USAR_GPU:
+        proveedores = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        id_contexto = 0
 
-    import onnxruntime as ort
-
-    print("USE_GPU:", USE_GPU)
+    print("USAR_GPU:", USAR_GPU)
     print("ONNX available providers:", ort.get_available_providers())
-    print("Providers solicitados:", providers)
-    print("ctx_id:", ctx_id)
-    app = FaceAnalysis(name="buffalo_l", providers=providers)
-    app.prepare(ctx_id=ctx_id, det_size=(320, 320), det_thresh=0.65)
+    print("Proveedores solicitados:", proveedores)
+    print("ctx_id:", id_contexto)
 
-    swapper = get_model(str(MODEL_PATH), providers=providers)
+    analizador_rostros = FaceAnalysis(
+        name="buffalo_l",
+        providers=proveedores
+    )
 
-    return app, swapper
+    analizador_rostros.prepare(
+        ctx_id=id_contexto,
+        det_size=(320, 320),
+        det_thresh=0.65
+    )
 
+    intercambiador_rostro = get_model(
+        str(RUTA_MODELO),
+        providers=proveedores
+    )
 
-def clean_binary_mask(mask):
-    _, mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
-
-    kernel = np.ones((7, 7), np.uint8)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-
-    h, w = mask.shape
-    flood = mask.copy()
-    flood_mask = np.zeros((h + 2, w + 2), np.uint8)
-
-    cv2.floodFill(flood, flood_mask, (0, 0), 255)
-    flood_inv = cv2.bitwise_not(flood)
-
-    mask_filled = cv2.bitwise_or(mask, flood_inv)
-
-    _, mask_filled = cv2.threshold(mask_filled, 127, 255, cv2.THRESH_BINARY)
-
-    return mask_filled
+    return analizador_rostros, intercambiador_rostro
 
 
-def make_fake_and_auth_masks(masks, target_face):
-    full_face_mask = masks["full_face"].copy()
+# ============================================================
+# GUARDADO DE RESULTADOS
+# ============================================================
 
-    fake_mask = mask_for_selected_face(full_face_mask, target_face)
+def guardar_muestra(id_muestra, imagen_manipulada, mascara_autentica, mascara_fake):
+    ruta_imagen = DIR_FINAL_OUT / "imagen_original" / f"{id_muestra}.png"
+    ruta_autentica = DIR_FINAL_OUT / "mascara_autentica" / f"{id_muestra}.png"
+    ruta_fake = DIR_FINAL_OUT / "mascara_fake" / f"{id_muestra}.png"
 
-    if fake_mask is None:
-        return None, None
+    cv2.imwrite(str(ruta_imagen), imagen_manipulada)
+    cv2.imwrite(str(ruta_autentica), mascara_autentica)
+    cv2.imwrite(str(ruta_fake), mascara_fake)
 
-    fake_mask = clean_binary_mask(fake_mask)
-
-    authentic_mask = np.zeros_like(fake_mask)
-
-    return fake_mask, authentic_mask
-
-
-def save_sample(sample_id, manipulated, authentic_mask, fake_mask):
-    img_path = OUTPUT_DIR / "imagen_original" / f"{sample_id}.png"
-    auth_path = OUTPUT_DIR / "mascara_autentica" / f"{sample_id}.png"
-    fake_path = OUTPUT_DIR / "mascara_fake" / f"{sample_id}.png"
-
-    cv2.imwrite(str(img_path), manipulated)
-    cv2.imwrite(str(auth_path), authentic_mask)
-    cv2.imwrite(str(fake_path), fake_mask)
-
-    return img_path, auth_path, fake_path
+    return ruta_imagen, ruta_autentica, ruta_fake
 
 
-def save_preview(sample_id, manipulated, authentic_mask, fake_mask):
-    auth_bgr = cv2.cvtColor(authentic_mask, cv2.COLOR_GRAY2BGR)
-    fake_bgr = cv2.cvtColor(fake_mask, cv2.COLOR_GRAY2BGR)
+def guardar_preview(id_muestra, imagen_manipulada, mascara_autentica, mascara_fake):
+    mascara_autentica_bgr = cv2.cvtColor(mascara_autentica, cv2.COLOR_GRAY2BGR)
+    mascara_fake_bgr = cv2.cvtColor(mascara_fake, cv2.COLOR_GRAY2BGR)
 
-    grid = np.hstack([manipulated, auth_bgr, fake_bgr])
-    out_path = PREVIEW_DIR / f"{sample_id}.png"
-    cv2.imwrite(str(out_path), grid)
+    comparativa = np.hstack([
+        imagen_manipulada,
+        mascara_autentica_bgr,
+        mascara_fake_bgr
+    ])
+
+    ruta_preview = DIR_PREVIEW / f"{id_muestra}.png"
+    cv2.imwrite(str(ruta_preview), comparativa)
 
 
-def main():
-    ensure_dirs()
+# ============================================================
+# FUNCIÓN PRINCIPAL
+# ============================================================
 
-    app, swapper = init_models()
+def principal():
+    crear_directorios()
 
-    image_files = get_image_files()
-    print("Imágenes encontradas:", len(image_files))
+    analizador_rostros, intercambiador_rostro = inicializar_modelos()
+
+    archivos_imagen = obtener_archivos_imagen()
+    print("Imágenes encontradas:", len(archivos_imagen))
 
     items = []
-    for path in image_files:
-        item = valid_item(path)
+
+    for ruta in archivos_imagen:
+        item = obtener_item_valido(ruta)
+
         if item is not None:
             items.append(item)
 
@@ -364,169 +482,184 @@ def main():
         print("Necesitas al menos 2 imágenes válidas.")
         return
 
-    records, processed_targets = load_existing_metadata()
+    registros, targets_procesados = cargar_metadata_existente()
 
-    next_batch_index = get_next_batch_index()
-    generated_this_run = 0
+    siguiente_indice_batch = obtener_siguiente_indice_batch()
+    generadas_en_ejecucion = 0
 
-    print(f"Batch actual: {BATCH_NAME}")
-    print(f"Método: {METHOD_NAME}")
-    print(f"Muestras existentes en metadata: {len(records)}")
-    print(f"Targets ya procesados: {len(processed_targets)}")
-    print(f"Siguiente índice dentro del batch: {next_batch_index}")
-
-    print(f"Batch actual: {BATCH_NAME}")
-    print(f"Método: {METHOD_NAME}")
-    print(f"Siguiente índice dentro del batch: {next_batch_index}")
+    print(f"Batch actual: {NOMBRE_BATCH}")
+    print(f"Método: {TIPO_DEEPFAKE}")
+    print(f"Muestras existentes en metadata: {len(registros)}")
+    print(f"Targets ya procesados: {len(targets_procesados)}")
+    print(f"Siguiente índice dentro del batch: {siguiente_indice_batch}")
 
     random.shuffle(items)
 
-    for target_item in tqdm(items):
-        if generated_this_run >= MAX_NEW_SAMPLES:
+    for item_target in tqdm(items):
+        if generadas_en_ejecucion >= NUM_MAX_MUESTRAS:
             break
 
-        if next_batch_index >= BATCH_SIZE:
-            print(f"Batch {BATCH_NAME} completado.")
+        if siguiente_indice_batch >= TAM_BATCH:
+            print(f"Batch {NOMBRE_BATCH} completado.")
             break
-        target_key = str(target_item["image_path"])
 
-        if target_key in processed_targets:
-            continue
-        target_img = read_image(target_item["image_path"])
-        if target_img is None:
+        llave_target = str(item_target["image_path"])
+
+        if llave_target in targets_procesados:
             continue
 
-        source_candidates = [x for x in items if x["stem"] != target_item["stem"]]
-        if not source_candidates:
+        imagen_target = leer_imagen(item_target["image_path"])
+
+        if imagen_target is None:
             continue
 
-        source_item = random.choice(source_candidates)
-        source_img = read_image(source_item["image_path"])
-        if source_img is None:
+        candidatos_fuente = [
+            item
+            for item in items
+            if item["stem"] != item_target["stem"]
+        ]
+
+        if not candidatos_fuente:
+            continue
+
+        item_fuente = random.choice(candidatos_fuente)
+        imagen_fuente = leer_imagen(item_fuente["image_path"])
+
+        if imagen_fuente is None:
             continue
 
         # Detectar rostro principal en target
-        target_faces = app.get(target_img)
+        rostros_target = analizador_rostros.get(imagen_target)
 
-        target_face, target_reason, target_faces_count = choose_main_face(
-            target_faces,
-            target_img.shape
+        rostro_target, razon_target, cantidad_rostros_target = elegir_rostro_principal(
+            rostros_target,
+            imagen_target.shape
         )
 
-        if target_face is None:
-            print(f"Descartada target {target_item['stem']}: {target_reason}, detectados={target_faces_count}")
+        if rostro_target is None:
+            print(
+                f"Descartada target {item_target['stem']}: "
+                f"{razon_target}, detectados={cantidad_rostros_target}"
+            )
             continue
 
         # Buscar source válido
-        source_face = None
-        valid_source_item = None
-        valid_source_img = None
-        source_reason = None
-        source_faces_count = 0
+        rostro_fuente = None
+        item_fuente_valido = None
+        imagen_fuente_valida = None
+        cantidad_rostros_fuente = 0
 
-        random.shuffle(source_candidates)
+        random.shuffle(candidatos_fuente)
 
-        for candidate in source_candidates:
-            candidate_img = read_image(candidate["image_path"])
+        for candidato in candidatos_fuente:
+            imagen_candidata = leer_imagen(candidato["image_path"])
 
-            if candidate_img is None:
+            if imagen_candidata is None:
                 continue
 
-            candidate_faces = app.get(candidate_img)
+            rostros_candidatos = analizador_rostros.get(imagen_candidata)
 
-            candidate_face, candidate_reason, candidate_count = choose_main_face(
-                candidate_faces,
-                candidate_img.shape
+            rostro_candidato, razon_candidato, cantidad_candidatos = elegir_rostro_principal(
+                rostros_candidatos,
+                imagen_candidata.shape
             )
 
-            if candidate_face is not None:
-                source_face = candidate_face
-                valid_source_item = candidate
-                valid_source_img = candidate_img
-                source_reason = candidate_reason
-                source_faces_count = candidate_count
+            if rostro_candidato is not None:
+                rostro_fuente = rostro_candidato
+                item_fuente_valido = candidato
+                imagen_fuente_valida = imagen_candidata
+                cantidad_rostros_fuente = cantidad_candidatos
                 break
 
-        if source_face is None:
-            print(f"Descartada target {target_item['stem']}: no se encontró source válido")
+        if rostro_fuente is None:
+            print(f"Descartada target {item_target['stem']}: no se encontró source válido")
             continue
 
-        source_item = valid_source_item
-        source_img = valid_source_img
+        item_fuente = item_fuente_valido
+        imagen_fuente = imagen_fuente_valida
 
         try:
-            swapped = swapper.get(
-                target_img,
-                target_face,
-                source_face,
+            imagen_swapeada = intercambiador_rostro.get(
+                imagen_target,
+                rostro_target,
+                rostro_fuente,
                 paste_back=True
             )
-        except Exception as e:
-            print(f"Error en swap {target_item['stem']} <- {source_item['stem']}: {e}")
+        except Exception as error:
+            print(
+                f"Error en swap {item_target['stem']} <- "
+                f"{item_fuente['stem']}: {error}"
+            )
             continue
 
-        fake_mask, authentic_mask = make_fake_and_auth_masks(
-            target_item["masks"],
-            target_face
-        )
-        if fake_mask is None or authentic_mask is None:
-            print(f"Descartada {target_item['stem']}: máscara no coincide con rostro seleccionado")
-            continue
-
-        if np.sum(fake_mask) == 0:
-            continue
-
-        if np.sum(fake_mask) == 0:
-            continue
-
-        sample_id = f"{METHOD_PREFIX}_b{BATCH_NUM:03d}_{next_batch_index:04d}"
-
-        img_path, auth_path, fake_path = save_sample(
-            sample_id,
-            swapped,
-            authentic_mask,
-            fake_mask
+        mascara_fake, mascara_autentica = crear_mascaras_fake_y_autentica(
+            item_target["masks"],
+            rostro_target
         )
 
-        save_preview(sample_id, swapped, authentic_mask, fake_mask)
+        if mascara_fake is None or mascara_autentica is None:
+            print(
+                f"Descartada {item_target['stem']}: "
+                "máscara no coincide con rostro seleccionado"
+            )
+            continue
 
-        records.append({
-            "id": sample_id,
-            "tipo": METHOD_NAME,
-            "batch": BATCH_NAME,
-            "batch_num": BATCH_NUM,
-            "batch_index": next_batch_index,
-            "global_index": BATCH_NUM * BATCH_SIZE + next_batch_index,
-            "target_stem": target_item["stem"],
-            "target_image": str(target_item["image_path"]),
-            "source_image": str(source_item["image_path"]),
-            "target_faces_detected": target_faces_count,
-            "source_faces_detected": source_faces_count,
+        if np.sum(mascara_fake) == 0:
+            continue
+
+        id_muestra = f"{PREFIJO_DEEPFAKE}_b{NUMERO_DE_BATCH:03d}_{siguiente_indice_batch:04d}"
+
+        ruta_imagen, ruta_autentica, ruta_fake = guardar_muestra(
+            id_muestra,
+            imagen_swapeada,
+            mascara_autentica,
+            mascara_fake
+        )
+
+        guardar_preview(
+            id_muestra,
+            imagen_swapeada,
+            mascara_autentica,
+            mascara_fake
+        )
+
+        registros.append({
+            "id": id_muestra,
+            "tipo": TIPO_DEEPFAKE,
+            "batch": NOMBRE_BATCH,
+            "batch_num": NUMERO_DE_BATCH,
+            "batch_index": siguiente_indice_batch,
+            "global_index": NUMERO_DE_BATCH * TAM_BATCH + siguiente_indice_batch,
+            "target_stem": item_target["stem"],
+            "target_image": str(item_target["image_path"]),
+            "source_image": str(item_fuente["image_path"]),
+            "target_faces_detected": cantidad_rostros_target,
+            "source_faces_detected": cantidad_rostros_fuente,
             "face_selection": "main_largest_non_ambiguous",
-            "target_face_area": get_face_area(target_face),
-            "source_face_area": get_face_area(source_face),
-            "imagen_original": str(img_path),
-            "mascara_autentica": str(auth_path),
-            "mascara_fake": str(fake_path)
+            "target_face_area": calcular_area_rostro(rostro_target),
+            "source_face_area": calcular_area_rostro(rostro_fuente),
+            "imagen_original": str(ruta_imagen),
+            "mascara_autentica": str(ruta_autentica),
+            "mascara_fake": str(ruta_fake)
         })
-        processed_targets.add(target_key)
 
-        metadata_path = OUTPUT_DIR / "metadata.csv"
-        pd.DataFrame(records).to_csv(metadata_path, index=False)
+        targets_procesados.add(llave_target)
 
-        next_batch_index += 1
-        generated_this_run += 1
+        ruta_metadata = DIR_FINAL_OUT / "metadata.csv"
+        pd.DataFrame(registros).to_csv(ruta_metadata, index=False)
 
+        siguiente_indice_batch += 1
+        generadas_en_ejecucion += 1
 
-    metadata_path = OUTPUT_DIR / "metadata.csv"
-    pd.DataFrame(records).to_csv(metadata_path, index=False)
+    ruta_metadata = DIR_FINAL_OUT / "metadata.csv"
+    pd.DataFrame(registros).to_csv(ruta_metadata, index=False)
 
-    print("Muestras generadas en esta ejecución:", generated_this_run)
-    print("Total en metadata:", len(records))
-    print("Metadata:", metadata_path)
-    print("Preview:", PREVIEW_DIR)
-    print("Salida:", OUTPUT_DIR)
+    print("Muestras generadas en esta ejecución:", generadas_en_ejecucion)
+    print("Total en metadata:", len(registros))
+    print("Metadata:", ruta_metadata)
+    print("Preview:", DIR_PREVIEW)
+    print("Salida:", DIR_FINAL_OUT)
 
 
 if __name__ == "__main__":
-    main()
+    principal()
