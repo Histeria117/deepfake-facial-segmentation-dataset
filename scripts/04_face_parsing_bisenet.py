@@ -18,15 +18,15 @@ DIR_PRINCIPAL = Path(r"C:\ALURA ONE\PythonProject\tesis_dataset")
 # Configuración para FaceSwap
 # ------------------------------------------------------------
 
-DIR_ENTRADA = DIR_PRINCIPAL / "data_raw" / "face_dataset" / "images_faceswap"
-DIR_SALIDA = DIR_PRINCIPAL / "face_parsing_output_faceswap"
+#DIR_ENTRADA = DIR_PRINCIPAL / "data_raw" / "face_dataset" / "images_faceswap"
+#DIR_SALIDA = DIR_PRINCIPAL / "face_parsing_output_faceswap"
 
 # ------------------------------------------------------------
 # Configuración para Inpainting
 # ------------------------------------------------------------
 
-# DIR_ENTRADA = DIR_PRINCIPAL / "data_raw" / "face_dataset" / "images_inpainting"
-# DIR_SALIDA = DIR_PRINCIPAL / "face_parsing_output_inpainting"
+DIR_ENTRADA = DIR_PRINCIPAL / "data_raw" / "face_dataset" / "images_inpainting"
+DIR_SALIDA = DIR_PRINCIPAL / "face_parsing_output_inpainting"
 
 
 TAM_IMAGEN = 512
@@ -260,7 +260,7 @@ def principal():
             str(DIR_SALIDA / "parsing_index" / f"{nombre_sin_extension}.png"),
             mapa_parsing
         )
-
+        mascaras_region = {}
         for nombre_region, ids_clase in MAPA_REGIONES.items():
             mascara = construir_mascara_binaria(
                 mapa_parsing,

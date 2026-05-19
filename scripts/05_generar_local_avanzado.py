@@ -15,7 +15,7 @@ from diffusers import StableDiffusionInpaintPipeline
 # CONFIGURACIÓN DE BATCH
 # ============================================================
 
-NUMERO_DE_BATCH = 3
+NUMERO_DE_BATCH = 4
 TAM_BATCH = 1000
 NUM_MAX_MUESTRAS = 100
 TAM_IMAGEN = 512
